@@ -6,24 +6,35 @@
 
 - `split_txt.py`: 将完整的文本文件按章节分割成多个独立的文件
 - `txt2json.py`: 使用 Google Gemini API 将分割后的章节文件转换为有声书 JSON 格式
+- `txt2json_openrouter.py`: 使用 OpenRouter API 将分割后的章节文件转换为有声书 JSON 格式（支持多线程和多种提供商）
 
 ## 依赖
 
 - Python 3.6+
-- `google-generativeai` 库
-- Google Gemini API 密钥
+- `google-generativeai` 库（用于 txt2json.py）
+- `openai` 库（用于 txt2json_openrouter.py）
+- Google Gemini API 密钥（用于 txt2json.py）
+- OpenRouter API 密钥（用于 txt2json_openrouter.py）
 
 ## 安装
 
 1. 安装依赖：
    ```bash
-   pip install google-generativeai
+   pip install google-generativeai openai
    ```
 
 2. 配置 API 密钥：
-   编辑 `config.py` 文件，将 `api_key` 设置为你的 Google Gemini API 密钥：
+   编辑 `config.py` 文件：
+   - 对于 `txt2json.py`：设置 `api_key` 为你的 Google Gemini API 密钥
+   - 对于 `txt2json_openrouter.py`：设置 `openrouter_api_key`、`openrouter_base_url` 和 `openrouter_model`
    ```python
-   api_key = "你的API密钥"
+   # Gemini 配置
+   api_key = "你的Gemini API密钥"
+
+   # OpenRouter 配置
+   openrouter_api_key = "你的OpenRouter API密钥"
+   openrouter_base_url = "https://openrouter.ai/api/v1"
+   openrouter_model = "openai/gpt-4o-mini"  # 或其他支持的模型
    ```
 
 ## 使用步骤
@@ -48,7 +59,11 @@ python split_txt.py
 
 ### 3. 转换为 JSON 格式
 
-运行 `txt2json.py` 来将分割后的章节转换为有声书 JSON：
+选择以下任一脚本将分割后的章节转换为有声书 JSON：
+
+#### 使用 Google Gemini API
+
+运行 `txt2json.py`：
 
 ```bash
 python txt2json.py
@@ -60,14 +75,37 @@ python txt2json.py
 - 为每个章节生成对应的 `.json` 文件
 - 跳过已存在 JSON 文件的章节
 
+#### 使用 OpenRouter API
+
+运行 `txt2json_openrouter.py`：
+
+```bash
+python txt2json_openrouter.py
+```
+
+此脚本将：
+- 扫描 `人性的弱点_chapters` 目录下的所有 `.txt` 文件
+- 使用 OpenRouter API 并行处理每个文件（支持多种提供商）
+- 为每个章节生成对应的 `.json` 文件
+- 跳过已存在 JSON 文件的章节
+- 支持多线程处理（可通过 `config.py` 中的 `max_workers` 配置并发数）
+
 ## 配置说明
 
 ### API 配置
 
-- API 密钥存储在 `config.py` 中
+#### Google Gemini 配置
+- API 密钥存储在 `config.py` 中的 `api_key`
 - 默认使用代理 `http://127.0.0.1:7892`（如不需要可注释掉相关行）
 - 模型：`gemini-2.5-pro`
 - 生成参数：温度 0.2
+
+#### OpenRouter 配置
+- API 密钥存储在 `config.py` 中的 `openrouter_api_key`
+- Base URL：`openrouter_base_url`（默认 `https://openrouter.ai/api/v1`）
+- 模型：`openrouter_model`（默认 `openai/gpt-4o-mini`，可选择其他支持的模型）
+- 生成参数：温度 0.2，最大 token 4096
+- 多线程：通过 `max_workers` 配置并发数（默认 6）
 
 ### JSON 格式规范
 

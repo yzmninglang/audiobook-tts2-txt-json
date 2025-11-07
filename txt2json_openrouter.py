@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-快速调用 Gemini 2.5 Pro，将 人性的弱点_chapters 目录下的所有 .txt 文件并行转换为 index-tts v2 有声书 JSON，并保存为对应的 .json 文件
+使用 OpenRouter API 将 人性的弱点_chapters 目录下的所有 .txt 文件并行转换为 index-tts v2 有声书 JSON，并保存为对应的 .json 文件
 依赖:
-  pip install google-generativeai
+  pip install openai
 
-环境变量:
-  GEMINI_API_KEY=你的API密钥
+环境变量或配置:
+  OPENROUTER_API_KEY=你的OpenRouter API密钥
 
 代理:
   本脚本会自动设置 HTTP(S)_PROXY = http://127.0.0.1:7892
@@ -17,31 +17,29 @@ import re
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import google.generativeai as genai
-from google.generativeai import types
+from openai import OpenAI
+import config
 
 # ========== 基本配置 ==========
 # 代理（按需注释掉）
 os.environ["HTTP_PROXY"] = "http://127.0.0.1:7892"
 os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7892"
-import config
-API_KEY = config.api_key
+
+# OpenRouter 配置
+API_KEY = config.openrouter_api_key
+BASE_URL = config.openrouter_base_url
+MODEL_NAME = config.openrouter_model
+
 if not API_KEY:
-    raise RuntimeError("未检测到 GEMINI_API_KEY，请先在环境变量中设置。")
+    raise RuntimeError("未检测到 OPENROUTER_API_KEY，请先在 config.py 中设置。")
 
-genai.configure(api_key=API_KEY)
-
-MODEL_NAME = "gemini-2.5-pro"  # 官方文档的模型ID
+client = OpenAI(
+    api_key=API_KEY,
+    base_url=BASE_URL,
+)
 
 # ========== 生成配置 ==========
-gen_config = types.GenerationConfig(
-    temperature=0.2,
-)
-
-model = genai.GenerativeModel(
-    model_name=MODEL_NAME,
-    generation_config=gen_config,
-)
+# 使用 OpenAI 兼容接口，默认参数
 
 # ========== 读取原文 ==========
 def process_single_file(txt_path):
@@ -59,10 +57,18 @@ def process_single_file(txt_path):
     )
 
     # 调用生成
-    resp = model.generate_content(user_prompt)
-
-    # 取文本
-    raw = resp.text if hasattr(resp, "text") else str(resp)
+    try:
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.2,
+            max_tokens=4096,  # 根据需要调整
+        )
+        raw = response.choices[0].message.content
+    except Exception as e:
+        raise RuntimeError(f"API 调用失败: {e}")
 
     # 兜底：确保拿到合法 JSON
     def extract_json(s: str):
@@ -106,8 +112,8 @@ def process_single_file(txt_path):
 
 # ========== 任务提示词（你的规范，原样内嵌） ==========
 SPEC_PROMPT = r"""
-请将提供的小说文本转换为专门用于 index-tts v2 引擎的有声书JSON格式。必须严格遵循以下所有规范和原则。 
-核心概念：情感向量 (emo_vector) 
+请将提供的小说文本转换为专门用于 index-tts v2 引擎的有声书JSON格式。必须严格遵循以下所有规范和原则。
+核心概念：情感向量 (emo_vector)
 此引擎使用一个包含8个浮点数的数组来精确控制情感。
 向量顺序（固定）: [喜, 怒, 哀, 惧, 厌恶, 低落, 惊喜, 平静]
 核心原则: 默认情感为 完全中性 [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]。只在绝对必要时，才对情感向量进行微调。
@@ -123,12 +129,12 @@ delay: 整数，该语音结束后的停顿时间（毫秒）。
 原则: 旁白必须是完全中性的讲述者，不携带任何情感、氛围或倾向。
 赋值方法: 固定且唯一地使用零向量。
 标准值: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-原则: 以“零向量”为基准，遵循“非必要，不调整”的极简主义。情感赋值必须基于深度的上下文分析（黄金标准），但表现形式上必须极度克制。
+原则: 以"零向量"为基准，遵循"非必要，不调整"的极简主义。情感赋值必须基于深度的上下文分析（黄金标准），但表现形式上必须极度克制。
 赋值方法:
 默认状态: 角色的 emo_vector 默认为 [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]。
 调整前提: 只有当角色的情绪通过上下文（如角色关系、处境、对话目的等）表现出明确且必要的情感倾向时，才进行调整。
 调整方式:
-优先单一情感: 尽量只调整一个最核心的情感值（例如，表达悲伤时只调整“哀”）。
+优先单一情感: 尽量只调整一个最核心的情感值（例如，表达悲伤时只调整"哀"）。
 审慎组合: 仅在角色情感确实是复杂交织（如讽刺、强颜欢笑）且不可用单一情感表达时，才组合两个情感值。
 保持轻微: 所有调整值必须是轻情绪，最大值为 0.3。
 三、内容处理与技术要求
@@ -201,7 +207,8 @@ def main():
     print(f"找到 {len(files_to_process)} 个需要处理的TXT文件，开始并行处理...")
 
     # 使用线程池并行处理
-    with ThreadPoolExecutor(max_workers=min(len(files_to_process), config.max_workers)) as executor:  # 最多6个并发，避免API限制
+    max_workers = getattr(config, 'max_workers', 6)  # 默认6个并发，避免API限制
+    with ThreadPoolExecutor(max_workers=min(len(files_to_process), max_workers)) as executor:
         futures = [executor.submit(process_single_file, txt_path) for txt_path in files_to_process]
 
         for future in as_completed(futures):
