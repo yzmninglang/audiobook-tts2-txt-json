@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-使用 OpenRouter API 将 人性的弱点_chapters 目录下的所有 .txt 文件并行转换为 index-tts v2 有声书 JSON，并保存为对应的 .json 文件
+使用阿里 Qwen Long API 将 人性的弱点_chapters 目录下的所有 .txt 文件并行转换为 index-tts v2 有声书 JSON，并保存为对应的 .json 文件
 依赖:
   pip install openai
 
 环境变量或配置:
-  OPENROUTER_API_KEY=你的OpenRouter API密钥
+  QWEN_API_KEY=你的阿里Qwen API密钥
 
 代理:
   本脚本会自动设置 HTTP(S)_PROXY = http://127.0.0.1:7892
@@ -26,13 +26,13 @@ import config
 os.environ["HTTP_PROXY"] = "http://127.0.0.1:7892"
 os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7892"
 
-# OpenRouter 配置
-API_KEY = config.openrouter_api_key
-BASE_URL = config.openrouter_base_url
-MODEL_NAME = config.openrouter_model
+# 阿里 Qwen 配置
+API_KEY = config.qwen_api_key
+BASE_URL = config.qwen_base_url
+MODEL_NAME = config.qwen_model
 
 if not API_KEY:
-    raise RuntimeError("未检测到 OPENROUTER_API_KEY，请先在 config.py 中设置。")
+    raise RuntimeError("未检测到 QWEN_API_KEY，请先在 config.py 中设置。")
 
 client = OpenAI(
     api_key=API_KEY,
@@ -69,7 +69,7 @@ def process_single_file(txt_path):
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.2,
-                max_tokens=4096,  # 根据需要调整
+                max_tokens=32768,  # Qwen Long 支持更长的上下文
             )
             raw = response.choices[0].message.content
             break  # 成功则跳出重试循环
@@ -105,11 +105,7 @@ def process_single_file(txt_path):
 
     data = extract_json(raw)
     if not isinstance(data, list):
-        # 如果解码失败，写入日志文件而非抛出异常
-        with open("request_logs.txt", "a", encoding="utf-8") as log_file:
-            log_file.write(f"解码失败：{txt_path}\n原始数据 (raw):\n{raw}\n\n")
-        print(f"解码失败，已记录到 request_logs.txt：{txt_path}")
-        # continue  # 假设在循环中，如果无法处理则跳过
+        raise ValueError(f"模型未返回预期的 JSON 数组，请检查 {txt_path} 或重试。")
 
     # 可选：轻度校验
     def minimally_valid(item):

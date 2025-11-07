@@ -14,6 +14,7 @@
 import os
 import json
 import re
+import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -58,11 +59,32 @@ def process_single_file(txt_path):
         "请确保输出是纯净的JSON数组格式。"
     )
 
-    # 调用生成
-    resp = model.generate_content(user_prompt)
+    max_retries = 5  # 最大重试次数
+    retry_delay = 25  # 初始重试延迟（秒）
 
-    # 取文本
-    raw = resp.text if hasattr(resp, "text") else str(resp)
+    for attempt in range(max_retries):
+        try:
+            # 调用生成
+            resp = model.generate_content(user_prompt)
+
+            # 取文本
+            raw = resp.text if hasattr(resp, "text") else str(resp)
+            break  # 成功则跳出重试循环
+
+        except Exception as e:
+            error_str = str(e)
+            if "429" in error_str or "quota" in error_str.lower() or "rate limit" in error_str.lower():
+                if attempt < max_retries - 1:
+                    print(f"处理失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+                    print(f"等待 {retry_delay} 秒后重试...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # 指数退避
+                    continue
+                else:
+                    raise RuntimeError(f"达到最大重试次数，处理失败: {e}")
+            else:
+                # 其他错误直接抛出
+                raise e
 
     # 兜底：确保拿到合法 JSON
     def extract_json(s: str):
@@ -177,9 +199,9 @@ JSON
 
 # ========== 主函数：并行处理目录下的所有TXT文件 ==========
 def main():
-    chapters_dir = Path("./人性的弱点_chapters")
+    chapters_dir = Path(config.input_dir)
     if not chapters_dir.exists() or not chapters_dir.is_dir():
-        raise FileNotFoundError("未找到 ./人性的弱点_chapters 目录，请确保拆分后的文件在此目录下。")
+        raise FileNotFoundError(f"未找到 {config.input_dir} 目录，请确保拆分后的文件在此目录下。")
 
     txt_files = list(chapters_dir.glob("*.txt"))
     if not txt_files:
@@ -197,6 +219,7 @@ def main():
     if not files_to_process:
         print("所有TXT文件都已处理完毕，无需再次转换。")
         return
+        # break
 
     print(f"找到 {len(files_to_process)} 个需要处理的TXT文件，开始并行处理...")
 

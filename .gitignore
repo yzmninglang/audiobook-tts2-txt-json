@@ -4,3 +4,4 @@
 prompt.md
 config.py
 *.pyc
+*.backup
