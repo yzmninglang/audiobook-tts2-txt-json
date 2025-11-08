@@ -26,14 +26,19 @@ from google.generativeai import types
 os.environ["HTTP_PROXY"] = "http://127.0.0.1:7892"
 os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7892"
 import config
-API_KEY = config.api_key
+API_KEY = config.gemini_api_key
+BASE_URL = config.gemini_base_url
 if not API_KEY:
-    raise RuntimeError("未检测到 GEMINI_API_KEY，请先在环境变量中设置。")
+    raise RuntimeError("未检测到 GEMINI_API_KEY，请先在config.py中设置。")
 
-genai.configure(api_key=API_KEY)
+if BASE_URL:
+    genai.configure(api_key=API_KEY, transport='rest', client_options={'api_endpoint': BASE_URL})
+else:
+    genai.configure(api_key=API_KEY, transport='rest')
 
-MODEL_NAME = "gemini-2.5-pro"  # 官方文档的模型ID
-
+MODEL_NAME = "gemini-2.5-pro"  # 官方文档的模型ID  "gemini-2.5-pro-maxthinking"
+# MODEL_NAME = "gemini-3-pro-preview-11-2025-maxthinking"
+# MODEL_NAME = "gemini-2.5-pro-maxthinking"
 # ========== 生成配置 ==========
 gen_config = types.GenerationConfig(
     temperature=0.2,

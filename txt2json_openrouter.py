@@ -21,10 +21,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from openai import OpenAI
 import config
 
-# ========== 基本配置 ==========
-# 代理（按需注释掉）
-os.environ["HTTP_PROXY"] = "http://127.0.0.1:7892"
-os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7892"
+# # ========== 基本配置 ==========
+# # 代理（按需注释掉）
+# os.environ["HTTP_PROXY"] = "http://127.0.0.1:7892"
+# os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7892"
 
 # OpenRouter 配置
 API_KEY = config.openrouter_api_key

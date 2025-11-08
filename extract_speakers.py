@@ -7,8 +7,8 @@ import config
 
 # ========== 基本配置 ==========
 # 代理（按需注释掉）
-os.environ["HTTP_PROXY"] = "http://127.0.0.1:7892"
-os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7892"
+# os.environ["HTTP_PROXY"] = "http://127.0.0.1:7892"
+# os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7892"
 
 # OpenRouter 配置
 API_KEY = config.openrouter_api_key
@@ -25,9 +25,9 @@ client = OpenAI(
 
 def extract_speakers_from_folder(folder_path):
     """
-    从指定文件夹中的所有 JSON 文件中提取 speaker 名称
+    从指定文件夹中的所有 JSON 文件中提取 speaker 名称及其出现次数
     """
-    speakers = set()
+    speakers = {}
 
     # 遍历文件夹中的所有 JSON 文件
     for json_file in Path(folder_path).glob("*.json"):
@@ -41,19 +41,20 @@ def extract_speakers_from_folder(folder_path):
                     if isinstance(item, dict) and 'speaker' in item:
                         speaker = item['speaker'].strip()
                         if speaker:  # 只添加非空 speaker
-                            speakers.add(speaker)
+                            speakers[speaker] = speakers.get(speaker, 0) + 1
 
         except Exception as e:
             print(f"处理文件 {json_file} 时出错: {e}")
 
-    return sorted(list(speakers))
+    # 按出现次数从多到少排序
+    return sorted(speakers.items(), key=lambda x: x[1], reverse=True)
 
 def classify_speakers_with_ai(speakers):
     """
     使用 OpenRouter API 对 speaker 进行年龄和性别分类
     """
-    # 过滤掉"旁白"
-    non_narration_speakers = [s for s in speakers if s != "旁白"]
+    # 过滤掉"旁白"，speakers是列表元组形式，需要提取名字
+    non_narration_speakers = [s[0] for s in speakers if s[0] != "旁白"]
 
     if not non_narration_speakers:
         return {}
@@ -84,6 +85,7 @@ def classify_speakers_with_ai(speakers):
 2. 所有人物都必须被分类到恰好一个类别中
 3. 基于人物名称的常见印象进行合理推断
 4. 如果不确定，优先选择"中男"或"中女"
+5. 不需要返回markdown代码块语法如```json  ```
 
 人物列表：
 {speaker_list}
@@ -104,6 +106,7 @@ def classify_speakers_with_ai(speakers):
             raw = response.choices[0].message.content
 
             # 解析 JSON
+            print(raw)
             result = json.loads(raw.strip())
             return result
 
@@ -125,10 +128,10 @@ def main():
 
     speakers = extract_speakers_from_folder(folder_path)
 
-    print(f"从 {folder_path} 中提取到的所有 speaker 名称：")
+    print(f"从 {folder_path} 中提取到的所有 speaker 名称及其出现次数（按次数从多到少排序）：")
     print("=" * 50)
-    for speaker in speakers:
-        print(f"- {speaker}")
+    for speaker, count in speakers:
+        print(f"- {speaker}: {count} 次")
     print("=" * 50)
     print(f"总共找到 {len(speakers)} 个不同的 speaker")
 
@@ -153,7 +156,7 @@ def main():
             json.dump({
                 "folder": folder_path,
                 "total_speakers": len(speakers),
-                "all_speakers": speakers,
+                "all_speakers": dict(speakers),
                 "classifications": classifications,
                 "classification_summary": {
                     category: len(names) for category, names in classifications.items()
