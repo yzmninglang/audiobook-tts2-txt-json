@@ -69,7 +69,7 @@ def process_single_file(txt_path):
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.2,
-                max_tokens=4096,  # 根据需要调整
+                max_tokens=650000,  # 根据需要调整
             )
             raw = response.choices[0].message.content
             break  # 成功则跳出重试循环
@@ -212,7 +212,7 @@ def main():
 
     txt_files = list(chapters_dir.glob("*.txt"))
     if not txt_files:
-        raise FileNotFoundError("在 ./人性的弱点_chapters 目录下未找到任何 .txt 文件。")
+        raise FileNotFoundError(f"在 ./{config.input_dir} 目录下未找到任何 .txt 文件。")
 
     # 过滤出没有对应JSON文件的TXT文件
     files_to_process = []
