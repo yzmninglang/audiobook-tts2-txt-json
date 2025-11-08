@@ -5,3 +5,4 @@ prompt.md
 config.py
 *.pyc
 *.backup
+test_pattern.py
