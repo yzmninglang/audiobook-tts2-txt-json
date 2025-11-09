@@ -101,13 +101,19 @@ def classify_speakers_with_ai(speakers):
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.1,  # 降低温度以获得更一致的结果
-                max_tokens=4096,
+                max_tokens=600000,
             )
             raw = response.choices[0].message.content
 
+            # 检查并移除 markdown 代码块标记
+            if raw.strip().startswith("```json") and raw.strip().endswith("```"):
+                raw = raw.strip()[len("```json"): -len("```")].strip()
+            elif raw.strip().startswith("```") and raw.strip().endswith("```"):
+                raw = raw.strip()[len("```"): -len("```")].strip()
+
             # 解析 JSON
             print(raw)
-            result = json.loads(raw.strip())
+            result = json.loads(raw)
             return result
 
         except Exception as e:

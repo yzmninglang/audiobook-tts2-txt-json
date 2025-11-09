@@ -69,7 +69,7 @@ def process_single_file(txt_path):
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.2,
-                max_tokens=650000,  # 根据需要调整
+                max_tokens=1000000,  # 根据需要调整
             )
             raw = response.choices[0].message.content
             break  # 成功则跳出重试循环
@@ -174,6 +174,7 @@ content 字段中只保留 ，、、、。、！、？ 和 ... 这几种标点�
 在情感转折、关键信息揭示或戏剧性停顿处，应设置更长的 delay 值（例如 1200ms 以上）。
 格式纯洁性:
 不要添加任何规定之外的字段或注释。输出必须是纯净、可被程序直接解析的JSON。
+不需要返回markdown代码块语法如```json  ```
 模板示例 (已按最终版新规修订)
 JSON
 [

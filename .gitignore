@@ -6,3 +6,7 @@ config.py
 *.pyc
 *.backup
 test_pattern.py
+split_*.py
+*.epub
+
+社会心理学.md
