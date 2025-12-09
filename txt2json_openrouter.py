@@ -1,14 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-使用 OpenRouter API 将 人性的弱点_chapters 目录下的所有 .txt 文件并行转换为 index-tts v2 有声书 JSON，并保存为对应的 .json 文件
-依赖:
-  pip install openai
-
-环境变量或配置:
-  OPENROUTER_API_KEY=你的OpenRouter API密钥
-
-代理:
-  本脚本会自动设置 HTTP(S)_PROXY = http://127.0.0.1:7892
+使用 OpenRouter API 将小说文本并行转换为 index-tts v2 有声书 JSON。
+修改版：采用分块处理（Chunking）策略，彻底解决长文本截断导致的 JSON 解码失败问题。
 """
 
 import os
@@ -22,7 +15,7 @@ from openai import OpenAI
 import config
 
 # # ========== 基本配置 ==========
-# # 代理（按需注释掉）
+# 代理（按需注释掉）
 # os.environ["HTTP_PROXY"] = "http://127.0.0.1:7899"
 # os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7899"
 
@@ -30,6 +23,10 @@ import config
 API_KEY = config.openrouter_api_key
 BASE_URL = config.openrouter_base_url
 MODEL_NAME = config.openrouter_model
+
+# 核心参数：切片大小（字符数）
+# 建议设置在 1200-1500 之间，留出足够的 Token 给 Output JSON
+MAX_CHUNK_SIZE = 8000 
 
 if not API_KEY:
     raise RuntimeError("未检测到 OPENROUTER_API_KEY，请先在 config.py 中设置。")
@@ -39,163 +36,143 @@ client = OpenAI(
     base_url=BASE_URL,
 )
 
-# ========== 生成配置 ==========
-# 使用 OpenAI 兼容接口，默认参数
+# ========== 工具函数：智能切分文本 ==========
+def split_text_into_chunks(text, max_size=1500):
+    """
+    按标点符号智能切分长文本，防止截断句子。
+    """
+    # 正则：按换行、句号、问号、感叹号切分，并保留分隔符
+    # 这里的 pattern 会捕获分隔符，所以 split 后列表会是 [文, 标点, 文, 标点...]
+    sentences = re.split(r'([。！？!?\n]+)', text)
+    
+    chunks = []
+    current_chunk = ""
+    
+    for i in range(0, len(sentences), 2):
+        sentence_text = sentences[i]
+        # 获取对应的标点（如果是最后一段可能没有）
+        punctuation = sentences[i+1] if i+1 < len(sentences) else ""
+        full_sentence = sentence_text + punctuation
+        
+        # 如果当前块 + 新句子 超过限制，则先保存当前块，开启新块
+        if len(current_chunk) + len(full_sentence) > max_size:
+            if current_chunk:
+                chunks.append(current_chunk)
+            current_chunk = full_sentence
+        else:
+            current_chunk += full_sentence
+            
+    if current_chunk:
+        chunks.append(current_chunk)
+        
+    return chunks
 
-# ========== 读取原文 ==========
-def process_single_file(txt_path):
-    """处理单个TXT文件，转换为JSON"""
-    print(f"开始处理: {txt_path}")
-    text = txt_path.read_text(encoding="utf-8")
-
-    # 构造最终提示
-    user_prompt = (
-        "你是一个严格的格式化器。"
-        "根据下述【规范】将【原文】转换为 index-tts v2 有声书 JSON，必须只输出有效 JSON 数组，不要任何额外说明：\n"
-        "【规范】如下：\n" + SPEC_PROMPT + "\n"
-        "【原文】如下：\n" + text + "\n"
-        "请确保输出是纯净的JSON数组格式。"
-    )
-
-    initial_messages = [{"role": "user", "content": user_prompt}]
-    raw_first_attempt = None
-    raw_second_attempt_content = None
-    final_raw_to_decode = None
-
-    # --- 第一次 API 调用尝试循环 ---
-    max_api_retries = 5  # 最大 API 重试次数
-    api_retry_delay = 60  # 初始 API 重试延迟（秒）
-
-    for attempt in range(max_api_retries):
+# ========== 工具函数：JSON 提取与清洗 ==========
+def extract_json_from_response(content):
+    """尝试从 LLM 回复中提取并解析 JSON"""
+    try:
+        return json.loads(content)
+    except Exception:
+        pass
+    
+    # 尝试提取 markdown 代码块或纯数组
+    # 匹配 [ ... ] 结构
+    m = re.search(r"(\[.*\])", content, flags=re.S)
+    if m:
         try:
-            response = client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=initial_messages,
-                temperature=0.2,
-                max_tokens=1000000,
-            )
-            raw_first_attempt = response.choices[0].message.content
-            break  # 成功则跳出 API 重试循环
-        except Exception as e:
-            error_str = str(e)
-            if "429" in error_str or "quota" in error_str.lower() or "rate limit" in error_str.lower():
-                if attempt < max_api_retries - 1:
-                    print(f"第一次 API 调用失败 (尝试 {attempt + 1}/{max_api_retries}): {e}")
-                    print(f"等待 {api_retry_delay} 秒后重试...")
-                    time.sleep(api_retry_delay)
-                    api_retry_delay *= 2  # 指数退避
-                    continue
-                else:
-                    raise RuntimeError(f"第一次 API 调用达到最大重试次数，处理失败: {e}")
-            else:
-                raise e # 其他错误直接抛出
-
-    # 兜底：确保拿到合法 JSON
-    def extract_json(s: str):
-        try:
-            return json.loads(s)
+            return json.loads(m.group(1))
         except Exception:
             pass
-        m = re.search(r"(\[.*\]|\{.*\})", s, flags=re.S)
-        if m:
-            try:
-                return json.loads(m.group(1))
-            except Exception:
-                return None
+    return None
+
+# ========== 核心逻辑：处理单个文件 ==========
+def process_single_file(txt_path):
+    """处理单个TXT文件：切分 -> 逐个转换 -> 合并 -> 保存"""
+    print(f"开始处理: {txt_path.name}")
+    try:
+        full_text = txt_path.read_text(encoding="utf-8")
+    except Exception as e:
+        print(f"读取文件失败 {txt_path}: {e}")
         return None
 
-    all_raw_responses = []
-    current_messages = list(initial_messages) # 复制一份，避免修改原始 initial_messages
+    # 1. 切分文本
+    chunks = split_text_into_chunks(full_text, MAX_CHUNK_SIZE)
+    print(f"文件 {txt_path.name} 已切分为 {len(chunks)} 个片段。")
 
-    # --- 循环进行 JSON 解码尝试 ---
-    # 默认尝试次数为 config.json_decode_attempts，至少为 1
-    num_decode_attempts = getattr(config, 'json_decode_attempts', 2)
-    if num_decode_attempts < 1:
-        num_decode_attempts = 1
-
-    data = None
-    for decode_attempt_num in range(1, num_decode_attempts + 1):
-        raw_response_content = None
-        api_retry_delay = 60 # 重置 API 延迟
-
-        for attempt in range(max_api_retries):
+    all_tts_data = [] # 存储最终合并的数据
+    
+    # 2. 逐个片段处理
+    for i, chunk_text in enumerate(chunks):
+        if not chunk_text.strip():
+            continue
+            
+        print(f"  > 正在处理片段 {i+1}/{len(chunks)} ({len(chunk_text)}字符)...")
+        
+        # 构造针对该片段的 Prompt
+        # 注意：这里我们告诉 LLM 这只是一个片段
+        user_prompt = (
+            "你是一个严格的格式化器。\n"
+            f"根据下述【规范】将提供的【小说片段】转换为 index-tts v2 有声书 JSON。\n"
+            "注意：这只是小说的一小部分，请只处理这段文字，不要编造开头或结尾，直接输出 JSON 数组。\n\n"
+            "【规范】如下：\n" + SPEC_PROMPT + "\n"
+            "【小说片段】如下：\n" 
+            f"'''\n{chunk_text}\n'''\n\n"
+            "请直接输出 JSON 数组："
+        )
+        
+        chunk_success = False
+        max_chunk_retries = 3 # 每个片段最多重试3次
+        
+        for attempt in range(max_chunk_retries):
             try:
                 response = client.chat.completions.create(
                     model=MODEL_NAME,
-                    messages=current_messages,
-                    temperature=0.2,
-                    max_tokens=1000000,
+                    messages=[{"role": "user", "content": user_prompt}],
+                    temperature=0.2, # 低温度保证格式稳定
+                    max_tokens=1000000, # 给输出留足空间
                 )
-                raw_response_content = response.choices[0].message.content
-                all_raw_responses.append(raw_response_content)
-                break
-            except Exception as e:
-                error_str = str(e)
-                if "429" in error_str or "quota" in error_str.lower() or "rate limit" in error_str.lower():
-                    if attempt < max_api_retries - 1:
-                        print(f"API 调用失败 (尝试 {attempt + 1}/{max_api_retries}, 解码尝试 {decode_attempt_num}): {e}")
-                        print(f"等待 {api_retry_delay} 秒后重试...")
-                        time.sleep(api_retry_delay)
-                        api_retry_delay *= 2
-                        continue
-                    else:
-                        raise RuntimeError(f"API 调用达到最大重试次数，处理失败: {e}")
+                
+                raw_content = response.choices[0].message.content
+                
+                # 尝试解析
+                parsed_data = extract_json_from_response(raw_content)
+                # print(raw_content)
+                if isinstance(parsed_data, list):
+                    all_tts_data.extend(parsed_data)
+                    chunk_success = True
+                    break # 成功，跳出重试循环
                 else:
-                    raise e
+                    print(f"    [警告] 片段 {i+1} 第 {attempt+1} 次解析失败：未找到有效列表。重试中...")
+            
+            except Exception as e:
+                print(f"    [错误] 片段 {i+1} 第 {attempt+1} 次 API 调用出错: {e}")
+                time.sleep(2) # 简单冷却
+        
+        if not chunk_success:
+            print(f"!!! [严重错误] 文件 {txt_path.name} 的片段 {i+1} 处理彻底失败，跳过该片段 !!!")
+            # 记录错误日志，但继续处理下一个片段，以免前功尽弃
+            with open("error_logs.txt", "a", encoding="utf-8") as f:
+                f.write(f"文件: {txt_path} | 片段: {i+1}\n内容:\n{chunk_text}\n\n")
 
-        if raw_response_content:
-            # 拼接所有历史响应进行解码
-            combined_raw = "".join(all_raw_responses)
-            data = extract_json(combined_raw)
-            if isinstance(data, list):
-                print(f"解码成功 (解码尝试 {decode_attempt_num})：{txt_path}")
-                break # 解码成功，跳出解码尝试循环
-            else:
-                print(f"解码失败 (解码尝试 {decode_attempt_num})：{txt_path}")
-                # 如果不是最后一次尝试，添加“继续”消息
-                if decode_attempt_num < num_decode_attempts:
-                    current_messages.append({"role": "assistant", "content": raw_response_content})
-                    current_messages.append({"role": "user", "content": "继续"})
-        else:
-            print(f"未获取到 API 响应内容 (解码尝试 {decode_attempt_num})：{txt_path}")
-            if decode_attempt_num < num_decode_attempts:
-                current_messages.append({"role": "user", "content": "继续"})
+    # 3. 结果校验与保存
+    if not all_tts_data:
+        print(f"未能生成任何有效数据: {txt_path}")
+        return None
 
+    # 简单校验
+    valid_count = 0
+    for item in all_tts_data:
+        if isinstance(item, dict) and "speaker" in item and "content" in item:
+            valid_count += 1
+            
+    print(f"文件 {txt_path.name} 处理完成，共生成 {valid_count} 条语音数据。")
 
-    if not isinstance(data, list):
-        # 如果所有解码尝试都失败，写入日志文件
-        with open("request_logs.txt", "a", encoding="utf-8") as log_file:
-            log_file.write(f"所有解码尝试失败：{txt_path}\n")
-            for i, raw_content in enumerate(all_raw_responses):
-                log_file.write(f"第 {i+1} 次原始数据:\n{raw_content}\n\n")
-            if not all_raw_responses:
-                log_file.write("未获取到任何原始数据。\n\n")
-        print(f"所有解码尝试失败，已记录到 request_logs.txt：{txt_path}")
-        return None # 返回 None 表示处理失败，以便主函数跳过保存
-
-    # 可选：轻度校验
-    def minimally_valid(item):
-        return (
-            isinstance(item, dict)
-            and set(item.keys()) == {"speaker", "content", "emo_vector", "delay"}
-            and isinstance(item["speaker"], str)
-            and isinstance(item["content"], str)
-            and isinstance(item["emo_vector"], list)
-            and len(item["emo_vector"]) == 8
-            and all(isinstance(x, (int, float)) for x in item["emo_vector"])
-            and isinstance(item["delay"], int)
-        )
-
-    if not all(minimally_valid(x) for x in data):
-        print(f"警告：{txt_path} 部分项不完全符合字段/类型要求，请检查结果。")
-
-    # 保存结果
     json_path = txt_path.with_suffix('.json')
-    json_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(json.dumps(all_tts_data, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"已保存到 {json_path}")
     return json_path
 
-# ========== 任务提示词（你的规范，原样内嵌） ==========
+# ========== 任务提示词 (保持不变) ==========
 SPEC_PROMPT = r"""
 请将提供的小说文本转换为专门用于 index-tts v2 引擎的有声书JSON格式。必须严格遵循以下所有规范和原则。
 核心概念：情感向量 (emo_vector)
@@ -265,27 +242,8 @@ JSON
     "content": "夜色如墨，冷雨敲打着窗棂，房间里唯一的光源来自桌上那盏昏黄的台灯。",
     "emo_vector": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     "delay": 800
-  },
-  {
-    "speaker": "李昂",
-    "content": "他们...真的都走了吗？",
-    "emo_vector": [0.0, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0],
-    "delay": 1200
-  },
-  {
-    "speaker": "旁白",
-    "content": "他的声音在空旷的房间里显得格外沙哑和无力，仿佛每一个字都耗尽了全身的力气。",
-    "emo_vector": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-    "delay": 700
-  },
-  {
-    "speaker": "神秘人",
-    "content": "别担心，我们很快就会再见面的。",
-    "emo_vector": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-    "delay": 900
   }
 ]
-小说章节内容如下：
 """
 
 # ========== 主函数：并行处理目录下的所有TXT文件 ==========
@@ -314,14 +272,15 @@ def main():
     print(f"找到 {len(files_to_process)} 个需要处理的TXT文件，开始并行处理...")
 
     # 使用线程池并行处理
-    max_workers = getattr(config, 'max_workers', 1)  # 默认6个并发，避免API限制
+    max_workers = getattr(config, 'max_workers', 1) 
     with ThreadPoolExecutor(max_workers=min(len(files_to_process), max_workers)) as executor:
         futures = [executor.submit(process_single_file, txt_path) for txt_path in files_to_process]
 
         for future in as_completed(futures):
             try:
                 result = future.result()
-                print(f"完成: {result}")
+                if result:
+                    print(f"完成: {result.name}")
             except Exception as e:
                 print(f"处理失败: {e}")
 
