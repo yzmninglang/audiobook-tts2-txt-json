@@ -11,3 +11,4 @@ split_*.py
 
 社会心理学.md
 test_openrouter_api.py
+!split_chaps.py
