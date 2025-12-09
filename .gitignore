@@ -10,3 +10,4 @@ split_*.py
 *.epub
 
 社会心理学.md
+test_openrouter_api.py

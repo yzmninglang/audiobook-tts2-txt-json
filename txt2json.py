@@ -23,8 +23,8 @@ from google.generativeai import types
 
 # ========== 基本配置 ==========
 # 代理（按需注释掉）
-os.environ["HTTP_PROXY"] = "http://127.0.0.1:7892"
-os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7892"
+os.environ["HTTP_PROXY"] = "http://127.0.0.1:7899"
+os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7899"
 import config
 API_KEY = config.gemini_api_key
 BASE_URL = config.gemini_base_url

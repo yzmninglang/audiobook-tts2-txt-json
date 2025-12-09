@@ -23,8 +23,8 @@ import config
 
 # # ========== 基本配置 ==========
 # # 代理（按需注释掉）
-# os.environ["HTTP_PROXY"] = "http://127.0.0.1:7892"
-# os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7892"
+# os.environ["HTTP_PROXY"] = "http://127.0.0.1:7899"
+# os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7899"
 
 # OpenRouter 配置
 API_KEY = config.openrouter_api_key
@@ -57,37 +57,38 @@ def process_single_file(txt_path):
         "请确保输出是纯净的JSON数组格式。"
     )
 
-    max_retries = 5  # 最大重试次数
-    retry_delay = 60  # 初始重试延迟（秒）
+    initial_messages = [{"role": "user", "content": user_prompt}]
+    raw_first_attempt = None
+    raw_second_attempt_content = None
+    final_raw_to_decode = None
 
-    for attempt in range(max_retries):
+    # --- 第一次 API 调用尝试循环 ---
+    max_api_retries = 5  # 最大 API 重试次数
+    api_retry_delay = 60  # 初始 API 重试延迟（秒）
+
+    for attempt in range(max_api_retries):
         try:
-            # 调用生成
             response = client.chat.completions.create(
                 model=MODEL_NAME,
-                messages=[
-                    {"role": "user", "content": user_prompt}
-                ],
+                messages=initial_messages,
                 temperature=0.2,
-                max_tokens=1000000,  # 根据需要调整
+                max_tokens=1000000,
             )
-            raw = response.choices[0].message.content
-            break  # 成功则跳出重试循环
-
+            raw_first_attempt = response.choices[0].message.content
+            break  # 成功则跳出 API 重试循环
         except Exception as e:
             error_str = str(e)
             if "429" in error_str or "quota" in error_str.lower() or "rate limit" in error_str.lower():
-                if attempt < max_retries - 1:
-                    print(f"处理失败 (尝试 {attempt + 1}/{max_retries}): {e}")
-                    print(f"等待 {retry_delay} 秒后重试...")
-                    time.sleep(retry_delay)
-                    retry_delay *= 2  # 指数退避
+                if attempt < max_api_retries - 1:
+                    print(f"第一次 API 调用失败 (尝试 {attempt + 1}/{max_api_retries}): {e}")
+                    print(f"等待 {api_retry_delay} 秒后重试...")
+                    time.sleep(api_retry_delay)
+                    api_retry_delay *= 2  # 指数退避
                     continue
                 else:
-                    raise RuntimeError(f"达到最大重试次数，处理失败: {e}")
+                    raise RuntimeError(f"第一次 API 调用达到最大重试次数，处理失败: {e}")
             else:
-                # 其他错误直接抛出
-                raise e
+                raise e # 其他错误直接抛出
 
     # 兜底：确保拿到合法 JSON
     def extract_json(s: str):
@@ -103,13 +104,74 @@ def process_single_file(txt_path):
                 return None
         return None
 
-    data = extract_json(raw)
+    all_raw_responses = []
+    current_messages = list(initial_messages) # 复制一份，避免修改原始 initial_messages
+
+    # --- 循环进行 JSON 解码尝试 ---
+    # 默认尝试次数为 config.json_decode_attempts，至少为 1
+    num_decode_attempts = getattr(config, 'json_decode_attempts', 2)
+    if num_decode_attempts < 1:
+        num_decode_attempts = 1
+
+    data = None
+    for decode_attempt_num in range(1, num_decode_attempts + 1):
+        raw_response_content = None
+        api_retry_delay = 60 # 重置 API 延迟
+
+        for attempt in range(max_api_retries):
+            try:
+                response = client.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=current_messages,
+                    temperature=0.2,
+                    max_tokens=1000000,
+                )
+                raw_response_content = response.choices[0].message.content
+                all_raw_responses.append(raw_response_content)
+                break
+            except Exception as e:
+                error_str = str(e)
+                if "429" in error_str or "quota" in error_str.lower() or "rate limit" in error_str.lower():
+                    if attempt < max_api_retries - 1:
+                        print(f"API 调用失败 (尝试 {attempt + 1}/{max_api_retries}, 解码尝试 {decode_attempt_num}): {e}")
+                        print(f"等待 {api_retry_delay} 秒后重试...")
+                        time.sleep(api_retry_delay)
+                        api_retry_delay *= 2
+                        continue
+                    else:
+                        raise RuntimeError(f"API 调用达到最大重试次数，处理失败: {e}")
+                else:
+                    raise e
+
+        if raw_response_content:
+            # 拼接所有历史响应进行解码
+            combined_raw = "".join(all_raw_responses)
+            data = extract_json(combined_raw)
+            if isinstance(data, list):
+                print(f"解码成功 (解码尝试 {decode_attempt_num})：{txt_path}")
+                break # 解码成功，跳出解码尝试循环
+            else:
+                print(f"解码失败 (解码尝试 {decode_attempt_num})：{txt_path}")
+                # 如果不是最后一次尝试，添加“继续”消息
+                if decode_attempt_num < num_decode_attempts:
+                    current_messages.append({"role": "assistant", "content": raw_response_content})
+                    current_messages.append({"role": "user", "content": "继续"})
+        else:
+            print(f"未获取到 API 响应内容 (解码尝试 {decode_attempt_num})：{txt_path}")
+            if decode_attempt_num < num_decode_attempts:
+                current_messages.append({"role": "user", "content": "继续"})
+
+
     if not isinstance(data, list):
-        # 如果解码失败，写入日志文件而非抛出异常
+        # 如果所有解码尝试都失败，写入日志文件
         with open("request_logs.txt", "a", encoding="utf-8") as log_file:
-            log_file.write(f"解码失败：{txt_path}\n原始数据 (raw):\n{raw}\n\n")
-        print(f"解码失败，已记录到 request_logs.txt：{txt_path}")
-        # continue  # 假设在循环中，如果无法处理则跳过
+            log_file.write(f"所有解码尝试失败：{txt_path}\n")
+            for i, raw_content in enumerate(all_raw_responses):
+                log_file.write(f"第 {i+1} 次原始数据:\n{raw_content}\n\n")
+            if not all_raw_responses:
+                log_file.write("未获取到任何原始数据。\n\n")
+        print(f"所有解码尝试失败，已记录到 request_logs.txt：{txt_path}")
+        return None # 返回 None 表示处理失败，以便主函数跳过保存
 
     # 可选：轻度校验
     def minimally_valid(item):
@@ -160,10 +222,29 @@ delay: 整数，该语音结束后的停顿时间（毫秒）。
 优先单一情感: 尽量只调整一个最核心的情感值（例如，表达悲伤时只调整"哀"）。
 审慎组合: 仅在角色情感确实是复杂交织（如讽刺、强颜欢笑）且不可用单一情感表达时，才组合两个情感值。
 保持轻微: 所有调整值必须是轻情绪，最大值为 0.3。
+
+标准值: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.1] （略带平静的客观叙述）
+特殊情况: 悬念铺垫或气氛营造时可调整为 [0.0, 0.0, 0.0, 0.1, 0.0, 0.0, 0.1, 0.0] （略带紧张和惊喜）
+演绎角色对话（模拟人物说话）：
+根据角色情绪进行调整，但保持克制
+
+范例：
+悲伤角色: [0.0, 0.0, 0.3, 0.0, 0.0, 0.1, 0.0, 0.0]
+愤怒角色: [0.0, 0.3, 0.0, 0.0, 0.1, 0.0, 0.0, 0.0]
+喜悦角色: [0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.1, 0.0]
+平淡对话: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.1]
+闲白评论（说书人跳出剧情的评论、感慨、调侃）：
+幽默调侃: [0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.1, 0.0]
+感慨评价: [0.0, 0.0, 0.1, 0.0, 0.0, 0.1, 0.0, 0.1]
+讥讽批评: [0.0, 0.1, 0.0, 0.0, 0.2, 0.0, 0.0, 0.0]
+包袱铺垫与抖响：
+铺垫阶段: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.2, 0.0] （带点悬念）
+抖包袱: [0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.2, 0.0] （轻松愉快带惊喜）
+
 三、内容处理与技术要求
 长段落拆分:
-任何超过100个字的段落必须被拆分。
-拆分点应在自然的停顿处（如句号、逗号后），确保每段在80-100字以内。
+任何超过80个字的段落必须被拆分。
+拆分点应在自然的停顿处（如句号、逗号后），确保每段在60-80字以内。
 重要: 由同一个长段落拆分出的所有片段，其 speaker 和 emo_vector 必须完全相同。
 内容与标点:
 content 字段中只保留 ，、、、。、！、？ 和 ... 这几种标点符号。
@@ -176,6 +257,7 @@ content 字段中只保留 ，、、、。、！、？ 和 ... 这几种标点�
 不要添加任何规定之外的字段或注释。输出必须是纯净、可被程序直接解析的JSON。
 不需要返回markdown代码块语法如```json  ```
 模板示例 (已按最终版新规修订)
+CODE
 JSON
 [
   {
@@ -203,6 +285,7 @@ JSON
     "delay": 900
   }
 ]
+小说章节内容如下：
 """
 
 # ========== 主函数：并行处理目录下的所有TXT文件 ==========
@@ -231,7 +314,7 @@ def main():
     print(f"找到 {len(files_to_process)} 个需要处理的TXT文件，开始并行处理...")
 
     # 使用线程池并行处理
-    max_workers = getattr(config, 'max_workers', 6)  # 默认6个并发，避免API限制
+    max_workers = getattr(config, 'max_workers', 1)  # 默认6个并发，避免API限制
     with ThreadPoolExecutor(max_workers=min(len(files_to_process), max_workers)) as executor:
         futures = [executor.submit(process_single_file, txt_path) for txt_path in files_to_process]
 
