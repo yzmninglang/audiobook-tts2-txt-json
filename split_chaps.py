@@ -59,7 +59,7 @@ def split_novel_by_fuzzy_matching(novel_file, chap_list_file):
 
     current_chapter = []
     chapter_num = 1
-    current_chapter_title = ""  # 初始化 current_chapter_title
+    current_chapter_title = "扉页"  # 初始化 current_chapter_title
 
     # 根据小说文件名创建输出文件夹
     novel_name = os.path.splitext(os.path.basename(novel_file))[0]
