@@ -19,7 +19,7 @@
 - `split_laozi.py`: 将《老子的逆袭人生》文本文件按 Markdown 一级标题（^# ）分割成多个独立的文件
 - `split_psychology.py`: 将《分析心理学的理论与实践》文本文件按"第xxx讲"分割成多个独立的文件
 - `txt2json.py`: 使用 Google Gemini API 将分割后的章节文件转换为有声书 JSON 格式
-- `txt2json_openrouter.py`: 使用 OpenRouter API 将分割后的章节文件转换为有声书 JSON 格式（支持多线程和多种提供商）
+- `txt2json_openrouter.py`: 使用 OpenRouter API 将分割后的章节文件转换为有声书 JSON 格式（支持多线程、多种提供商和章节标题旁白）
 - `txt2json_qwen.py`: 使用阿里 Qwen Long API 将分割后的章节文件转换为有声书 JSON 格式（支持多线程）
 - `extract_speakers.py`: 从指定文件夹中的所有 JSON 文件中提取并打印所有唯一的 speaker 名称
 - `replace_speakers.py`: 读取 speaker 分类文件，自动替换所有 JSON 文件中的 speaker 为对应的分类标签

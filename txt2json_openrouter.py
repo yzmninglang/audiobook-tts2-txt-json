@@ -36,6 +36,23 @@ client = OpenAI(
     base_url=BASE_URL,
 )
 
+# ========== 工具函数：提取章节标题 ==========
+def extract_chapter_title(filename):
+    """
+    从文件名提取章节标题，例如 P02_Chapter 02 大脑的适应能力.txt -> 第2章 大脑的适应能力
+    """
+    # 移除文件扩展名
+    name = filename.rsplit('.', 1)[0]
+    # 分割 '_'
+    parts = name.split('_', 1)
+    if len(parts) == 2:
+        p_part, title_part = parts
+        # 提取数字部分
+        if p_part.startswith('P') and p_part[1:].isdigit():
+            num = int(p_part[1:])
+            return f"第{num}章 {title_part}"
+    return None
+
 # ========== 工具函数：智能切分文本 ==========
 def split_text_into_chunks(text, max_size=1500):
     """
@@ -154,7 +171,18 @@ def process_single_file(txt_path):
             with open("error_logs.txt", "a", encoding="utf-8") as f:
                 f.write(f"文件: {txt_path} | 片段: {i+1}\n内容:\n{chunk_text}\n\n")
 
-    # 3. 结果校验与保存
+    # 3. 添加章节标题旁白
+    chapter_title = extract_chapter_title(txt_path.name)
+    if chapter_title:
+        title_entry = {
+            "speaker": "旁白",
+            "content": chapter_title,
+            "emo_vector": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "delay": 600
+        }
+        all_tts_data.insert(0, title_entry)
+
+    # 4. 结果校验与保存
     if not all_tts_data:
         print(f"未能生成任何有效数据: {txt_path}")
         return None
@@ -164,7 +192,7 @@ def process_single_file(txt_path):
     for item in all_tts_data:
         if isinstance(item, dict) and "speaker" in item and "content" in item:
             valid_count += 1
-            
+
     print(f"文件 {txt_path.name} 处理完成，共生成 {valid_count} 条语音数据。")
 
     json_path = txt_path.with_suffix('.json')
