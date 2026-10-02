@@ -30,6 +30,7 @@ from qfluentwidgets import (
     CardWidget,
     ComboBox,
     FluentIcon,
+    LineEdit,
     PrimaryPushButton,
     PushButton,
     SubtitleLabel,
@@ -51,6 +52,7 @@ class SpeakerPage(QWidget):
     classify_requested = pyqtSignal()
     apply_requested = pyqtSignal(dict)
     export_requested = pyqtSignal(str)
+    tts_requested = pyqtSignal(dict)  # prompt audio mapping: category → wav path
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -123,6 +125,38 @@ class SpeakerPage(QWidget):
 
         left_layout.addWidget(table_card, 1)
 
+        # --- Prompt audio card ---
+        prompt_card = CardWidget(self)
+        prompt_layout = QVBoxLayout(prompt_card)
+        prompt_layout.setContentsMargins(
+            SPACING_MEDIUM, SPACING_MEDIUM, SPACING_MEDIUM, SPACING_MEDIUM
+        )
+        prompt_layout.setSpacing(SPACING_SMALL)
+
+        prompt_title = SubtitleLabel(t("speaker.prompt_audio"), self)
+        prompt_layout.addWidget(prompt_title)
+
+        self._prompt_audio_edits: dict[str, LineEdit] = {}
+        _ALL_CATEGORIES = ["\u65c1\u767d", "\u5c11\u7537", "\u5c11\u5973", "\u4e2d\u7537", "\u4e2d\u5973", "\u8001\u7537", "\u8001\u5973"]
+        for cat in _ALL_CATEGORIES:
+            row = QHBoxLayout()
+            row.setSpacing(SPACING_SMALL)
+            lbl = BodyLabel(cat, self)
+            lbl.setFixedWidth(50)
+            edit = LineEdit(self)
+            edit.setReadOnly(True)
+            edit.setPlaceholderText(t("speaker.browse") + " ...")
+            browse_btn = PushButton(t("speaker.browse"), self)
+            browse_btn.setFixedWidth(60)
+            browse_btn.clicked.connect(lambda checked, c=cat: self._browse_prompt_audio(c))
+            row.addWidget(lbl)
+            row.addWidget(edit, 1)
+            row.addWidget(browse_btn)
+            prompt_layout.addLayout(row)
+            self._prompt_audio_edits[cat] = edit
+
+        left_layout.addWidget(prompt_card)
+
         splitter.addWidget(left_panel)
 
         # --- Right panel ---
@@ -158,11 +192,14 @@ class SpeakerPage(QWidget):
         bottom_row.setSpacing(SPACING_SMALL)
         self.apply_btn = PrimaryPushButton(t("speaker.apply"), self)
         self.export_btn = PushButton(t("speaker.export"), self)
+        self.tts_btn = PrimaryPushButton(FluentIcon.MEGAPHONE, t("speaker.synthesize"), self)
         self.apply_btn.clicked.connect(self._on_apply_clicked)
         self.export_btn.clicked.connect(self._on_export_clicked)
+        self.tts_btn.clicked.connect(self._on_tts_clicked)
         bottom_row.addStretch()
         bottom_row.addWidget(self.apply_btn)
         bottom_row.addWidget(self.export_btn)
+        bottom_row.addWidget(self.tts_btn)
         right_layout.addLayout(bottom_row)
 
         splitter.addWidget(right_panel)
@@ -330,3 +367,38 @@ class SpeakerPage(QWidget):
         )
         if directory:
             self.export_requested.emit(directory)
+
+    def _on_tts_clicked(self) -> None:
+        mapping = self.get_prompt_audio_mapping()
+        if not mapping:
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.warning(
+                t("common.warning"),
+                t("speaker.no_prompt_audio"),
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+            )
+            return
+        self.tts_requested.emit(mapping)
+
+    def _browse_prompt_audio(self, category: str) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            f"{t('speaker.prompt_audio')} - {category}",
+            "",
+            "Audio Files (*.wav *.mp3 *.flac);;All Files (*)",
+        )
+        if path:
+            edit = self._prompt_audio_edits.get(category)
+            if edit:
+                edit.setText(path)
+
+    def get_prompt_audio_mapping(self) -> dict[str, str]:
+        """Return {category: wav_path} for categories that have a path set."""
+        result: dict[str, str] = {}
+        for cat, edit in self._prompt_audio_edits.items():
+            path = edit.text().strip()
+            if path:
+                result[cat] = path
+        return result

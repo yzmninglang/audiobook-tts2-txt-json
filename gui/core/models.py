@@ -59,3 +59,5 @@ class PipelineState(BaseModel):
     speakers: list[SpeakerInfo] = Field(default_factory=list)
     classifications: dict[str, list[str]] = Field(default_factory=dict)
     output_dir: str = ""
+    speaker_prompt_audio: dict[str, str] = Field(default_factory=dict)  # category → wav path
+    tts_output_dir: str = ""

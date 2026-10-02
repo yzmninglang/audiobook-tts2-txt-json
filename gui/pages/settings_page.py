@@ -189,6 +189,19 @@ class SettingsPage(ScrollArea):
         root_layout.addWidget(sub)
         root_layout.addWidget(card)
 
+        # --- TTS group ---------------------------------------------------
+        self._tts_url = LineEdit()
+        self._tts_url.setPlaceholderText("http://localhost:8300")
+
+        sub, card = _make_group(
+            t("settings.tts"),
+            [
+                _make_row(t("settings.tts_server_url"), self._tts_url),
+            ],
+        )
+        root_layout.addWidget(sub)
+        root_layout.addWidget(card)
+
         # --- General group -----------------------------------------------
         # Theme combo
         self._theme_combo = ComboBox()
@@ -276,6 +289,9 @@ class SettingsPage(ScrollArea):
         # MinerU
         self._mineru_token.setText(config.mineru_api_token)
 
+        # TTS
+        self._tts_url.setText(config.tts_server_url)
+
         # General - theme
         theme_map = {"light": 0, "dark": 1, "auto": 2}
         self._theme_combo.setCurrentIndex(theme_map.get(config.theme, 0))
@@ -305,6 +321,8 @@ class SettingsPage(ScrollArea):
             qwen_model=self._qwen_model.text().strip(),
             # MinerU
             mineru_api_token=self._mineru_token.text().strip(),
+            # TTS
+            tts_server_url=self._tts_url.text().strip() or "http://localhost:8300",
             # General
             theme=theme_values[theme_index] if 0 <= theme_index < len(theme_values) else "light",
             default_chunk_size=self._chunk_spin.value(),

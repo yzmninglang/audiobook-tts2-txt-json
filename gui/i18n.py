@@ -51,6 +51,14 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "设置",
         "en": "Settings",
     },
+    "nav.ocr_preview": {
+        "zh": "OCR 预览",
+        "en": "OCR Preview",
+    },
+    "nav.tts": {
+        "zh": "语音合成",
+        "en": "TTS Synthesis",
+    },
 
     # ==================================================================
     # Import page
@@ -102,6 +110,42 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "import.reading_file": {
         "zh": "正在读取文件...",
         "en": "Reading file...",
+    },
+
+    # ==================================================================
+    # OCR Preview page
+    # ==================================================================
+    "ocr_preview.title": {
+        "zh": "OCR 预览与编辑",
+        "en": "OCR Preview & Edit",
+    },
+    "ocr_preview.save_md": {
+        "zh": "保存为 MD",
+        "en": "Save as MD",
+    },
+    "ocr_preview.continue_split": {
+        "zh": "继续分割",
+        "en": "Continue to Split",
+    },
+    "ocr_preview.load_history": {
+        "zh": "从历史加载",
+        "en": "Load from History",
+    },
+    "ocr_preview.history_title": {
+        "zh": "历史记录",
+        "en": "History",
+    },
+    "ocr_preview.no_history": {
+        "zh": "暂无历史记录",
+        "en": "No history records",
+    },
+    "ocr_preview.save_success": {
+        "zh": "Markdown 已保存",
+        "en": "Markdown saved",
+    },
+    "ocr_preview.delete_confirm": {
+        "zh": "确认删除此历史记录？",
+        "en": "Delete this history entry?",
     },
 
     # ==================================================================
@@ -295,6 +339,22 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "少男/少女/中男/中女/老男/老女",
         "en": "Young Male/Young Female/Middle-aged Male/Middle-aged Female/Elder Male/Elder Female",
     },
+    "speaker.prompt_audio": {
+        "zh": "提示音频",
+        "en": "Prompt Audio",
+    },
+    "speaker.browse": {
+        "zh": "浏览",
+        "en": "Browse",
+    },
+    "speaker.synthesize": {
+        "zh": "语音合成",
+        "en": "Synthesize Audio",
+    },
+    "speaker.no_prompt_audio": {
+        "zh": "请至少设置一个分类的提示音频",
+        "en": "Please set prompt audio for at least one category",
+    },
 
     # ==================================================================
     # Settings page
@@ -374,6 +434,78 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "settings.save_success": {
         "zh": "设置已保存",
         "en": "Settings Saved",
+    },
+    "settings.tts": {
+        "zh": "TTS 语音合成",
+        "en": "TTS Synthesis",
+    },
+    "settings.tts_server_url": {
+        "zh": "TTS 服务地址",
+        "en": "TTS Server URL",
+    },
+
+    # ==================================================================
+    # TTS page
+    # ==================================================================
+    "tts.title": {
+        "zh": "语音合成",
+        "en": "TTS Synthesis",
+    },
+    "tts.output_dir": {
+        "zh": "输出目录",
+        "en": "Output Directory",
+    },
+    "tts.select_dir": {
+        "zh": "选择目录",
+        "en": "Select Directory",
+    },
+    "tts.select_all": {
+        "zh": "全选",
+        "en": "Select All",
+    },
+    "tts.deselect_all": {
+        "zh": "取消全选",
+        "en": "Deselect All",
+    },
+    "tts.start": {
+        "zh": "开始合成",
+        "en": "Start Synthesis",
+    },
+    "tts.cancel": {
+        "zh": "取消合成",
+        "en": "Cancel",
+    },
+    "tts.progress": {
+        "zh": "合成进度",
+        "en": "Synthesis Progress",
+    },
+    "tts.log": {
+        "zh": "合成日志",
+        "en": "Synthesis Log",
+    },
+    "tts.chapter_status": {
+        "zh": "章节状态",
+        "en": "Chapter Status",
+    },
+    "tts.no_chapters": {
+        "zh": "没有可用的章节",
+        "en": "No chapters available",
+    },
+    "tts.no_output_dir": {
+        "zh": "请先选择输出目录",
+        "en": "Please select an output directory first",
+    },
+    "tts.synthesizing": {
+        "zh": "正在合成...",
+        "en": "Synthesizing...",
+    },
+    "tts.success": {
+        "zh": "合成完成",
+        "en": "Synthesis Complete",
+    },
+    "tts.error": {
+        "zh": "合成失败",
+        "en": "Synthesis Failed",
     },
 
     # ==================================================================
