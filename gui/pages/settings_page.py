@@ -9,7 +9,13 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPlainTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 from qfluentwidgets import (
     BodyLabel,
     CardWidget,
@@ -20,6 +26,7 @@ from qfluentwidgets import (
     LineEdit,
     PasswordLineEdit,
     PrimaryPushButton,
+    PushButton,
     ScrollArea,
     Slider,
     SpinBox,
@@ -28,6 +35,12 @@ from qfluentwidgets import (
 )
 
 from gui.core.config import AppConfig
+from gui.core.pipeline import (
+    DEFAULT_CLASSIFY_PROMPT,
+    DEFAULT_JSON_GEN_PROMPT,
+    DEFAULT_POLISH_PROMPT,
+    POLISH_RULES,
+)
 from gui.i18n import t
 from gui.styles import (
     FONT_SIZE_PAGE_TITLE,
@@ -42,6 +55,36 @@ from gui.styles import (
 # Constants
 # ---------------------------------------------------------------------------
 _LABEL_WIDTH = 120
+
+# Editable LLM prompts: (AppConfig attribute, i18n label key, built-in default).
+# An empty config value means "use the built-in default".
+_PROMPT_FIELDS: list[tuple[str, str, str]] = [
+    ("prompt_json_gen", "settings.prompt_json_gen", DEFAULT_JSON_GEN_PROMPT),
+    ("prompt_polish", "settings.prompt_polish", DEFAULT_POLISH_PROMPT),
+    (
+        "prompt_polish_rule_tables",
+        "settings.prompt_rule_tables",
+        POLISH_RULES["tables"],
+    ),
+    (
+        "prompt_polish_rule_numbers",
+        "settings.prompt_rule_numbers",
+        POLISH_RULES["numbers"],
+    ),
+    (
+        "prompt_polish_rule_cleanup",
+        "settings.prompt_rule_cleanup",
+        POLISH_RULES["cleanup"],
+    ),
+    ("prompt_classify", "settings.prompt_classify", DEFAULT_CLASSIFY_PROMPT),
+]
+
+# Attribute names of the three polish rule text fields (subset of _PROMPT_FIELDS).
+_RULE_ATTRS = {
+    "prompt_polish_rule_tables",
+    "prompt_polish_rule_numbers",
+    "prompt_polish_rule_cleanup",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +295,51 @@ class SettingsPage(ScrollArea):
         root_layout.addWidget(sub)
         root_layout.addWidget(card)
 
+        # --- LLM prompts group -------------------------------------------
+        prompt_sub = SubtitleLabel(t("settings.prompts"))
+        root_layout.addWidget(prompt_sub)
+
+        hint = BodyLabel(t("settings.prompt_hint"))
+        hint.setWordWrap(True)
+        root_layout.addWidget(hint)
+
+        prompt_card = CardWidget()
+        prompt_layout = QVBoxLayout(prompt_card)
+        prompt_layout.setContentsMargins(
+            MARGIN_STANDARD, MARGIN_STANDARD, MARGIN_STANDARD, MARGIN_STANDARD,
+        )
+        prompt_layout.setSpacing(SPACING_MEDIUM)
+
+        self._prompt_editors: dict[str, QPlainTextEdit] = {}
+        for attr, label_key, default_text in _PROMPT_FIELDS:
+            # Sub-header introducing the per-rule polish fields.
+            if attr == "prompt_polish_rule_tables":
+                rules_label = BodyLabel(t("settings.prompt_polish_rules"))
+                rules_font = rules_label.font()
+                rules_font.setBold(True)
+                rules_label.setFont(rules_font)
+                prompt_layout.addWidget(rules_label)
+
+            header = QHBoxLayout()
+            header.setSpacing(SPACING_SMALL)
+            header.addWidget(BodyLabel(t(label_key)))
+            header.addStretch()
+            restore_btn = PushButton(t("settings.restore_default"))
+            restore_btn.setFixedWidth(110)
+            restore_btn.clicked.connect(
+                lambda _=False, a=attr, d=default_text: self._prompt_editors[a].setPlainText(d)
+            )
+            header.addWidget(restore_btn)
+            prompt_layout.addLayout(header)
+
+            editor = QPlainTextEdit()
+            editor.setPlainText(default_text)
+            editor.setMinimumHeight(90 if attr in _RULE_ATTRS else 150)
+            prompt_layout.addWidget(editor)
+            self._prompt_editors[attr] = editor
+
+        root_layout.addWidget(prompt_card)
+
         # --- Save button -------------------------------------------------
         self._save_btn = PrimaryPushButton(FluentIcon.SAVE, t("settings.save"))
         self._save_btn.setFixedWidth(200)
@@ -302,10 +390,23 @@ class SettingsPage(ScrollArea):
         self._threshold_slider.setValue(config.default_similarity_threshold)
         self._threshold_label.setText(str(config.default_similarity_threshold))
 
+        # LLM prompts (empty config value -> show the built-in default)
+        for attr, _label_key, default_text in _PROMPT_FIELDS:
+            self._prompt_editors[attr].setPlainText(
+                getattr(config, attr) or default_text
+            )
+
     def save_to_config(self) -> AppConfig:
         """Read all fields and return an updated :class:`AppConfig`."""
         theme_values = ["light", "dark", "auto"]
         theme_index = self._theme_combo.currentIndex()
+
+        # Prompts: store "" when the text still equals the built-in default,
+        # so config.yaml stays clean and future default changes still apply.
+        prompt_values: dict[str, str] = {}
+        for attr, _label_key, default_text in _PROMPT_FIELDS:
+            value = self._prompt_editors[attr].toPlainText().strip()
+            prompt_values[attr] = "" if value == default_text.strip() else value
 
         return AppConfig(
             # OpenRouter
@@ -328,6 +429,8 @@ class SettingsPage(ScrollArea):
             default_chunk_size=self._chunk_spin.value(),
             default_max_workers=self._workers_spin.value(),
             default_similarity_threshold=self._threshold_slider.value(),
+            # LLM prompts
+            **prompt_values,
         )
 
     # -----------------------------------------------------------------

@@ -43,7 +43,7 @@ class HistoryEntry:
     created_at: str  # ISO-8601
 
 
-def _safe_filename(name: str) -> str:
+def safe_filename(name: str) -> str:
     """Strip characters that are problematic in file paths."""
     return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip("_ ")
 
@@ -61,7 +61,7 @@ def save_history(
     HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe = _safe_filename(book_name) or "untitled"
+    safe = safe_filename(book_name) or "untitled"
     filename = f"{safe}_{ts}.md"
     filepath = HISTORY_DIR / filename
 

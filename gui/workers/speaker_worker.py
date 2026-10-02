@@ -35,12 +35,14 @@ class SpeakerClassifyWorker(QThread):
     finished = pyqtSignal(dict)   # classifications dict
     error = pyqtSignal(str)
 
-    def __init__(self, speaker_names: list, api_key: str, base_url: str, model: str):
+    def __init__(self, speaker_names: list, api_key: str, base_url: str, model: str,
+                 prompt_template: str | None = None):
         super().__init__()
         self._speaker_names = speaker_names
         self._api_key = api_key
         self._base_url = base_url
         self._model = model
+        self._prompt_template = prompt_template
 
     def run(self):
         try:
@@ -50,7 +52,7 @@ class SpeakerClassifyWorker(QThread):
                 self.finished.emit({})
                 return
 
-            prompt = build_classify_prompt(names)
+            prompt = build_classify_prompt(names, self._prompt_template)
             client = OpenAI(api_key=self._api_key, base_url=self._base_url)
 
             max_retries = 3

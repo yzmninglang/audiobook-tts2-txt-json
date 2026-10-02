@@ -43,6 +43,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "JSON 生成",
         "en": "JSON Generation",
     },
+    "nav.polish": {
+        "zh": "文本润色",
+        "en": "Text Polish",
+    },
     "nav.speaker": {
         "zh": "说话人",
         "en": "Speaker",
@@ -277,6 +281,94 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     },
 
     # ==================================================================
+    # Text polish page
+    # ==================================================================
+    "polish.title": {
+        "zh": "文本润色",
+        "en": "Text Polish",
+    },
+    "polish.hint": {
+        "zh": "在不改动主要内容的前提下，把表格、数字与排版标记改写为适合朗读的口播稿。",
+        "en": "Rewrite tables, numbers and markup into a listenable script — without changing the content.",
+    },
+    "polish.rules": {
+        "zh": "处理项",
+        "en": "Rules",
+    },
+    "polish.rule_tables": {
+        "zh": "表格转述",
+        "en": "Tables to speech",
+    },
+    "polish.rule_numbers": {
+        "zh": "数字口语化",
+        "en": "Speakable numbers",
+    },
+    "polish.rule_cleanup": {
+        "zh": "排版与符号清理",
+        "en": "Cleanup markup",
+    },
+    "polish.start": {
+        "zh": "开始润色",
+        "en": "Start Polishing",
+    },
+    "polish.polishing": {
+        "zh": "正在润色...",
+        "en": "Polishing...",
+    },
+    "polish.progress": {
+        "zh": "润色进度",
+        "en": "Polishing Progress",
+    },
+    "polish.log": {
+        "zh": "润色日志",
+        "en": "Polishing Log",
+    },
+    "polish.preview": {
+        "zh": "预览",
+        "en": "Preview",
+    },
+    "polish.original": {
+        "zh": "原文",
+        "en": "Original",
+    },
+    "polish.polished": {
+        "zh": "润色后",
+        "en": "Polished",
+    },
+    "polish.no_preview": {
+        "zh": "点击左侧章节查看预览",
+        "en": "Click a chapter on the left to preview",
+    },
+    "polish.export": {
+        "zh": "导出润色文本",
+        "en": "Export Polished Text",
+    },
+    "polish.export_success": {
+        "zh": "润色文本已导出",
+        "en": "Polished text exported",
+    },
+    "polish.no_polished": {
+        "zh": "暂无可导出的润色结果，请先润色",
+        "en": "No polished text to export yet — polish first",
+    },
+    "polish.next": {
+        "zh": "下一步：生成 JSON",
+        "en": "Next: Generate JSON",
+    },
+    "polish.success": {
+        "zh": "润色完成",
+        "en": "Polishing Complete",
+    },
+    "polish.error": {
+        "zh": "润色失败",
+        "en": "Polishing Failed",
+    },
+    "polish.no_chapters": {
+        "zh": "没有可用的章节",
+        "en": "No chapters available",
+    },
+
+    # ==================================================================
     # Speaker page
     # ==================================================================
     "speaker.title": {
@@ -442,6 +534,46 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "settings.tts_server_url": {
         "zh": "TTS 服务地址",
         "en": "TTS Server URL",
+    },
+    "settings.prompts": {
+        "zh": "LLM 提示词",
+        "en": "LLM Prompts",
+    },
+    "settings.prompt_hint": {
+        "zh": "留空则使用内置默认。可用占位符：{text}（待处理文本）、{rules}（润色规则）、{speaker_list}（人物列表）。修改前请谨慎，可能影响输出结构。",
+        "en": "Leave empty to use the built-in default. Placeholders: {text}, {rules}, {speaker_list}. Edit with care — changes may affect output structure.",
+    },
+    "settings.prompt_json_gen": {
+        "zh": "JSON 生成提示词",
+        "en": "JSON Generation Prompt",
+    },
+    "settings.prompt_polish": {
+        "zh": "润色提示词",
+        "en": "Polish Prompt",
+    },
+    "settings.prompt_polish_rules": {
+        "zh": "润色规则（对应润色页的勾选项）",
+        "en": "Polish Rules (match the polish page checkboxes)",
+    },
+    "settings.prompt_rule_tables": {
+        "zh": "表格转述",
+        "en": "Tables to speech",
+    },
+    "settings.prompt_rule_numbers": {
+        "zh": "数字口语化",
+        "en": "Speakable numbers",
+    },
+    "settings.prompt_rule_cleanup": {
+        "zh": "排版与符号清理",
+        "en": "Cleanup markup",
+    },
+    "settings.prompt_classify": {
+        "zh": "说话人分类提示词",
+        "en": "Speaker Classification Prompt",
+    },
+    "settings.restore_default": {
+        "zh": "恢复默认",
+        "en": "Restore Default",
     },
 
     # ==================================================================

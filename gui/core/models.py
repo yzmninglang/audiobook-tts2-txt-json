@@ -55,6 +55,9 @@ class PipelineState(BaseModel):
     markdown_content: str = ""
     chapter_list_raw: str = ""
     chapters: list[ChapterInfo] = Field(default_factory=list)
+    # chapter index -> polished (listen-friendly) text, produced by the
+    # text-polishing stage before JSON generation.
+    polished_content: dict[int, str] = Field(default_factory=dict)
     chapter_results: list[ChapterResult] = Field(default_factory=list)
     speakers: list[SpeakerInfo] = Field(default_factory=list)
     classifications: dict[str, list[str]] = Field(default_factory=dict)

@@ -30,6 +30,7 @@ from qfluentwidgets import (
 )
 
 from gui.core.config import AppConfig, load_config, save_config
+from gui.core.history import safe_filename
 from gui.core.models import PipelineState
 from gui.i18n import set_language, t
 from gui.pages.import_page import ImportPage
@@ -50,6 +51,7 @@ from gui.styles import (
 if TYPE_CHECKING:
     from gui.pages.chapter_split_page import ChapterSplitPage
     from gui.pages.json_gen_page import JsonGenPage
+    from gui.pages.polish_page import PolishPage
     from gui.pages.settings_page import SettingsPage
     from gui.pages.speaker_page import SpeakerPage
 
@@ -77,6 +79,7 @@ class MainWindow(FluentWindow):
         # Build import page immediately; others are lazy
         self._import_page = ImportPage(self)
         self._chapter_split_page: ChapterSplitPage | None = None
+        self._polish_page: PolishPage | None = None
         self._json_gen_page: JsonGenPage | None = None
         self._speaker_page: SpeakerPage | None = None
         self._settings_page: SettingsPage | None = None
@@ -84,6 +87,7 @@ class MainWindow(FluentWindow):
         self._nav_routes_added: set[str] = set()
         self._deferred_page_queue: list[str] = [
             "chapter_split",
+            "polish",
             "json_gen",
             "speaker",
             "settings",
@@ -186,6 +190,17 @@ class MainWindow(FluentWindow):
                 )
                 self._nav_routes_added.add(key)
 
+        elif key == "polish" and self._polish_page is None:
+            from gui.pages.polish_page import PolishPage
+
+            self._polish_page = PolishPage(self)
+            self._connect_polish_page()
+            if add_to_navigation and key not in self._nav_routes_added:
+                self.addSubInterface(
+                    self._polish_page, FluentIcon.EDIT, t("nav.polish")
+                )
+                self._nav_routes_added.add(key)
+
         elif key == "json_gen" and self._json_gen_page is None:
             from gui.pages.json_gen_page import JsonGenPage
 
@@ -253,6 +268,12 @@ class MainWindow(FluentWindow):
     def _connect_chapter_split_page(self):
         self._chapter_split_page.split_requested.connect(self._on_split_requested)
         self._chapter_split_page.next_step.connect(self._on_split_next)
+
+    def _connect_polish_page(self):
+        self._polish_page.polish_requested.connect(self._on_polish_requested)
+        self._polish_page.cancel_requested.connect(self._on_polish_cancel)
+        self._polish_page.export_requested.connect(self._on_polish_export)
+        self._polish_page.next_step.connect(self._on_polish_next)
 
     def _connect_json_gen_page(self):
         self._json_gen_page.generate_requested.connect(self._on_generate_requested)
@@ -396,7 +417,22 @@ class MainWindow(FluentWindow):
         InfoBar.error(t("common.error"), msg, parent=self, position=InfoBarPosition.TOP, duration=5000)
 
     def _on_split_next(self):
-        """Switch to JSON gen page after splitting."""
+        """Switch to the text-polish page after splitting."""
+        self._ensure_page("polish")
+        if self._polish_page:
+            rows = [
+                {
+                    "index": ch.index,
+                    "name": f"P{ch.index:02d}_{ch.title}",
+                    "original": ch.content,
+                }
+                for ch in self.pipeline_state.chapters
+            ]
+            self._polish_page.update_chapters(rows)
+            self.switchTo(self._polish_page)
+
+    def _goto_json_gen(self):
+        """Switch to the JSON generation page."""
         self._ensure_page("json_gen")
         if self._json_gen_page:
             chapter_names = [
@@ -404,6 +440,165 @@ class MainWindow(FluentWindow):
             ]
             self._json_gen_page.update_chapters(chapter_names)
             self.switchTo(self._json_gen_page)
+
+    # ------------------------------------------------------------------
+    # Text polish handlers
+    # ------------------------------------------------------------------
+
+    def _resolve_provider(self, provider: str) -> tuple[str, str, str]:
+        """Map a provider display name to ``(api_key, base_url, model)``."""
+        provider_lower = (provider or "").lower()
+        if provider_lower == "gemini":
+            return (
+                self.config.gemini_api_key,
+                self.config.gemini_base_url + "/v1beta/",
+                "gemini-2.5-flash",
+            )
+        if provider_lower == "qwen":
+            return (
+                self.config.qwen_api_key,
+                self.config.qwen_base_url,
+                self.config.qwen_model,
+            )
+        return (
+            self.config.openrouter_api_key,
+            self.config.openrouter_base_url,
+            self.config.openrouter_model,
+        )
+
+    def _on_polish_requested(self, selected_indices, provider, workers,
+                             chunk_size, rules):
+        if not self.pipeline_state.chapters:
+            InfoBar.warning(
+                t("common.warning"),
+                t("polish.no_chapters"),
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+            )
+            return
+
+        api_key, base_url, model = self._resolve_provider(provider)
+        if not api_key:
+            InfoBar.warning(
+                t("common.warning"),
+                f"请先在设置页配置 {provider} API Key",
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+            )
+            return
+
+        from gui.workers.polish_worker import TextPolishWorker
+
+        chapters_data = [
+            {"index": ch.index, "title": ch.title, "content": ch.content}
+            for ch in self.pipeline_state.chapters
+        ]
+        actual_indices = [
+            self.pipeline_state.chapters[i].index for i in selected_indices
+        ]
+
+        self._polish_page.reset_progress()
+        self._polish_page.set_polishing(True)
+
+        worker = TextPolishWorker(
+            chapters=chapters_data,
+            selected_indices=actual_indices,
+            provider=(provider or "").lower(),
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            max_workers=workers,
+            chunk_size=chunk_size,
+            rules=rules,
+            prompt_template=self.config.prompt_polish or None,
+            rule_texts={
+                "tables": self.config.prompt_polish_rule_tables,
+                "numbers": self.config.prompt_polish_rule_numbers,
+                "cleanup": self.config.prompt_polish_rule_cleanup,
+            },
+        )
+        self._polish_worker = worker
+        worker.chapter_progress.connect(self._polish_page.update_chapter_status)
+        worker.log_message.connect(self._polish_page.append_log)
+        worker.finished.connect(self._on_polish_finished)
+        worker.error.connect(self._on_polish_error)
+        self._active_workers.append(worker)
+        worker.finished.connect(lambda _: self._cleanup_worker(worker))
+        worker.error.connect(lambda _: self._cleanup_worker(worker))
+        worker.start()
+
+    def _on_polish_cancel(self):
+        worker = getattr(self, "_polish_worker", None)
+        if worker is not None:
+            worker.cancel()
+        if self._polish_page:
+            self._polish_page.append_log("已请求取消润色...")
+
+    def _on_polish_finished(self, results: list):
+        for r in results:
+            idx = r["chapter_index"]
+            text = r.get("polished_content", "")
+            if r.get("status") == "done" and text:
+                self.pipeline_state.polished_content[idx] = text
+            if self._polish_page:
+                self._polish_page.set_polished(idx, text)
+
+        if self._polish_page:
+            self._polish_page.set_polishing(False)
+
+        InfoBar.success(
+            t("common.success"),
+            t("polish.success"),
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=3000,
+        )
+
+    def _on_polish_error(self, msg: str):
+        if self._polish_page:
+            self._polish_page.set_polishing(False)
+        InfoBar.error(
+            t("common.error"), msg, parent=self,
+            position=InfoBarPosition.TOP, duration=5000,
+        )
+
+    def _on_polish_export(self, output_dir: str):
+        """Write each polished chapter to *output_dir* as a .txt file."""
+        polished = self.pipeline_state.polished_content
+        if not polished:
+            InfoBar.warning(
+                t("common.warning"),
+                t("polish.no_polished"),
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+            )
+            return
+
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+
+        titles = {ch.index: ch.title for ch in self.pipeline_state.chapters}
+        count = 0
+        for idx, text in sorted(polished.items()):
+            if not text:
+                continue
+            stem = safe_filename(f"P{idx:02d}_{titles.get(idx, '')}") or f"P{idx:02d}"
+            (out / f"{stem}.txt").write_text(text, encoding="utf-8")
+            count += 1
+
+        InfoBar.success(
+            t("common.success"),
+            f"{t('polish.export_success')}: {output_dir}",
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=5000,
+        )
+
+    def _on_polish_next(self):
+        self._goto_json_gen()
 
     # ------------------------------------------------------------------
     # JSON gen handlers
@@ -414,22 +609,7 @@ class MainWindow(FluentWindow):
 
         # Map provider name to config
         provider_lower = provider.lower()
-        if provider_lower == "openrouter":
-            api_key = self.config.openrouter_api_key
-            base_url = self.config.openrouter_base_url
-            model = self.config.openrouter_model
-        elif provider_lower == "gemini":
-            api_key = self.config.gemini_api_key
-            base_url = self.config.gemini_base_url + "/v1beta/"
-            model = "gemini-2.5-flash"
-        elif provider_lower == "qwen":
-            api_key = self.config.qwen_api_key
-            base_url = self.config.qwen_base_url
-            model = self.config.qwen_model
-        else:
-            api_key = self.config.openrouter_api_key
-            base_url = self.config.openrouter_base_url
-            model = self.config.openrouter_model
+        api_key, base_url, model = self._resolve_provider(provider)
 
         if not api_key:
             InfoBar.warning(
@@ -441,13 +621,15 @@ class MainWindow(FluentWindow):
             )
             return
 
-        # Build chapter dicts for the worker
+        # Build chapter dicts for the worker; prefer polished text if the
+        # polishing stage has run for a chapter.
+        polished = self.pipeline_state.polished_content
         chapters_data = []
         for ch in self.pipeline_state.chapters:
             chapters_data.append({
                 "index": ch.index,
                 "title": ch.title,
-                "content": ch.content,
+                "content": polished.get(ch.index, ch.content),
             })
 
         # Adjust selected indices: UI is 0-based, chapters are 1-based
@@ -462,6 +644,7 @@ class MainWindow(FluentWindow):
             model=model,
             max_workers=workers,
             chunk_size=chunk_size,
+            prompt_template=self.config.prompt_json_gen or None,
         )
         worker.chapter_progress.connect(self._json_gen_page.update_chapter_status)
         worker.log_message.connect(self._json_gen_page.append_log)
@@ -556,6 +739,7 @@ class MainWindow(FluentWindow):
             api_key=self.config.openrouter_api_key,
             base_url=self.config.openrouter_base_url,
             model=self.config.openrouter_model,
+            prompt_template=self.config.prompt_classify or None,
         )
         worker.finished.connect(self._on_classify_finished)
         worker.error.connect(lambda msg: InfoBar.error(

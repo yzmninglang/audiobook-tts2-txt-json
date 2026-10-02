@@ -4,7 +4,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PyQt6.QtCore import QThread, pyqtSignal
 from openai import OpenAI
-from gui.core.pipeline import SPEC_PROMPT, split_text_into_chunks, extract_json_from_response
+from gui.core.pipeline import build_json_gen_prompt, split_text_into_chunks, extract_json_from_response
 
 class JsonGenWorker(QThread):
     chapter_progress = pyqtSignal(int, str, str)  # chapter_index, status, message
@@ -22,6 +22,7 @@ class JsonGenWorker(QThread):
         model: str,
         max_workers: int = 5,
         chunk_size: int = 8000,
+        prompt_template: str | None = None,
     ):
         super().__init__()
         self._chapters = chapters
@@ -32,6 +33,7 @@ class JsonGenWorker(QThread):
         self._model = model
         self._max_workers = max_workers
         self._chunk_size = chunk_size
+        self._prompt_template = prompt_template
         self._cancelled = False
 
     def cancel(self):
@@ -60,15 +62,7 @@ class JsonGenWorker(QThread):
 
             self.log_message.emit(f"[章节 {idx}] 处理片段 {i+1}/{len(chunks)} ({len(chunk_text)}字符)")
 
-            user_prompt = (
-                "你是一个严格的格式化器。\n"
-                f"根据下述【规范】将提供的【小说片段】转换为 index-tts v2 有声书 JSON。\n"
-                "注意：这只是小说的一小部分，请只处理这段文字，不要编造开头或结尾，直接输出 JSON 数组。\n\n"
-                "【规范】如下：\n" + SPEC_PROMPT + "\n"
-                "【小说片段】如下：\n"
-                f"'''\n{chunk_text}\n'''\n\n"
-                "请直接输出 JSON 数组："
-            )
+            user_prompt = build_json_gen_prompt(chunk_text, self._prompt_template)
 
             chunk_success = False
             max_retries = 3

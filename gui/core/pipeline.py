@@ -89,6 +89,55 @@ JSON
 
 
 # ============================================================
+# Prompt templates & rendering
+#
+# Every LLM prompt is a *template*: runtime content is injected by
+# replacing `{name}` placeholders.  We deliberately avoid str.format()
+# because prompt bodies contain literal `{` / `}` (JSON examples).
+# Each template has a built-in default below; users may override any of
+# them via the settings page (persisted as `prompt_*` in config.yaml).
+# ============================================================
+def _fill(template: str, mapping: dict[str, str]) -> str:
+    """Replace ``{key}`` occurrences in *template* with the mapped values.
+
+    Only the named keys are replaced — other braces are left untouched.
+    """
+    out = template
+    for key, value in mapping.items():
+        out = out.replace("{" + key + "}", value)
+    return out
+
+
+# Default JSON-generation prompt.  ``{text}`` is the novel fragment.
+DEFAULT_JSON_GEN_PROMPT = (
+    "你是一个严格的格式化器。\n"
+    "根据下述【规范】将提供的【小说片段】转换为 index-tts v2 有声书 JSON。\n"
+    "注意：这只是小说的一小部分，请只处理这段文字，不要编造开头或结尾，直接输出 JSON 数组。\n\n"
+    "【规范】如下：\n" + SPEC_PROMPT + "\n"
+    "【小说片段】如下：\n'''\n{text}\n'''\n\n"
+    "请直接输出 JSON 数组："
+)
+
+
+def build_json_gen_prompt(chunk_text: str, template: str | None = None) -> str:
+    """Build the LLM prompt that turns one text chunk into JSON entries.
+
+    Parameters
+    ----------
+    chunk_text : str
+        The novel fragment to convert.
+    template : str or None
+        Override template.  When *None*, :data:`DEFAULT_JSON_GEN_PROMPT`
+        is used.  If the template lacks a ``{text}`` placeholder the
+        fragment is appended at the end.
+    """
+    tpl = template or DEFAULT_JSON_GEN_PROMPT
+    if "{text}" not in tpl:
+        tpl = tpl.rstrip() + "\n\n'''\n{text}\n'''"
+    return _fill(tpl, {"text": chunk_text})
+
+
+# ============================================================
 # split_by_fuzzy_matching  (ported from split_chaps.py)
 # ============================================================
 def split_by_fuzzy_matching(
@@ -350,22 +399,7 @@ def apply_speaker_replacements(
 # ============================================================
 # build_classify_prompt  (from extract_speakers.py)
 # ============================================================
-def build_classify_prompt(speaker_names: list[str]) -> str:
-    """Build the LLM prompt for classifying speaker names.
-
-    Parameters
-    ----------
-    speaker_names : list[str]
-        Speaker names **excluding** "旁白".
-
-    Returns
-    -------
-    str
-        The full prompt string ready to send to an LLM.
-    """
-    speaker_list = "\n".join(f"- {s}" for s in speaker_names)
-
-    prompt = f"""请分析以下人物名称列表，根据中文语境和常见认知，将每个人物分类为以下六类之一：
+DEFAULT_CLASSIFY_PROMPT = """请分析以下人物名称列表，根据中文语境和常见认知，将每个人物分类为以下六类之一：
 
 分类标准：
 - 年龄：少（青少年/年轻人）、中（中年人）、老（老年人）
@@ -374,14 +408,14 @@ def build_classify_prompt(speaker_names: list[str]) -> str:
 六类组合：少男、少女、中男、中女、老男、老女
 
 请以严格的JSON格式返回结果，格式如下：
-{{
+{
   "少男": ["人物1", "人物2"],
   "少女": ["人物3", "人物4"],
   "中男": ["人物5", "人物6"],
   "中女": ["人物7", "人物8"],
   "老男": ["人物9", "人物10"],
   "老女": ["人物11", "人物12"]
-}}
+}
 
 注意：
 1. 每个类别都是数组，即使为空数组也要包含
@@ -395,4 +429,156 @@ def build_classify_prompt(speaker_names: list[str]) -> str:
 
 请返回纯净的JSON格式，不要任何额外说明。"""
 
-    return prompt
+
+def build_classify_prompt(
+    speaker_names: list[str],
+    template: str | None = None,
+) -> str:
+    """Build the LLM prompt for classifying speaker names.
+
+    Parameters
+    ----------
+    speaker_names : list[str]
+        Speaker names **excluding** "旁白".
+    template : str or None
+        Override template.  When *None*, :data:`DEFAULT_CLASSIFY_PROMPT`
+        is used.  If the template lacks a ``{speaker_list}`` placeholder
+        the name list is appended at the end.
+
+    Returns
+    -------
+    str
+        The full prompt string ready to send to an LLM.
+    """
+    speaker_list = "\n".join(f"- {s}" for s in speaker_names)
+    tpl = template or DEFAULT_CLASSIFY_PROMPT
+    if "{speaker_list}" not in tpl:
+        tpl = tpl.rstrip() + "\n\n人物列表：\n{speaker_list}"
+    return _fill(tpl, {"speaker_list": speaker_list})
+
+
+# ============================================================
+# Text polishing (前置润色) — listening adaptation for audiobooks
+# ============================================================
+POLISH_BASE_PROMPT = r"""
+你是一位有声书文本预处理编辑。你的任务是把电子书文本改写为"适合朗读、适合听"的口播稿，
+为后续的 TTS 语音合成做准备。
+
+【最高原则】
+1. 忠实原文：绝不增删、概括或曲解文章的主要内容和观点，只做"听感适配"。
+2. 保持原有的段落顺序、人称、时态与语言风格不变。
+3. 遇到无法确定的内容，保持原文，不要臆造。
+4. 只输出处理后的正文本身，不要任何解释、标题或 markdown 代码块。
+"""
+
+# Selectable rule blocks, keyed by an id the UI can toggle.
+POLISH_RULES: dict[str, str] = {
+    "tables": r"""【表格转述】
+把表格（包括 markdown 表格，如 | 名称 | 数值 |）改写成连贯、听得懂的口语化句子：
+- 按"表头＋数值"的顺序逐项念出，必要时用连接词串联。例如：
+  | 年份 | 收入 |
+  | 2020 | 100  |
+  | 2021 | 150  |
+  改写为："2020年，收入是一百；2021年，收入是一百五十。"
+- 表头较长时，先用一句话概括"下面是关于……的表格"，再逐项念出。
+- 空单元格直接忽略；不要念出竖线、横线等表格符号。""",
+    "numbers": r"""【数字与单位口语化】
+把只适合阅读、不适合朗读的写法改写为适合朗读的中文口语，含义保持不变：
+- 年份：1998年 → 一九九八年；2010年 → 二零一零年
+- 百分比：35% → 百分之三十五；2.5% → 百分之二点五
+- 分数：3/4 → 四分之三
+- 小数：3.1415 → 三点一四一五
+- 时间：10:30 → 十点三十分
+- 金额与大数：12,000 → 一万二千；$1,200 → 一千二百美元（保留原币种）
+- 区间：5-10 → 五到十；1990—1999 → 一九九零年到一九九九年
+- 序号编号：第2章 → 第二章；A. → 第一；II → 第二
+- 专业符号按中文习惯念出：H₂O → 水，CO₂ → 二氧化碳，α → 阿尔法，
+  β → 贝塔，°C → 摄氏度，km → 公里
+- 不确定含义的缩写、代号、编号，保持原样。""",
+    "cleanup": r"""【排版与符号清理】
+删除或改写无法朗读、干扰收听的排版元素，同时保留正文文字：
+- 去掉 markdown 标记：# 标题号、** 加粗、* 斜体、` 反引号、``` 代码围栏、- 与 1. 等列表符号
+- 无序列表（- 项目）改成"第一，……；第二，……"或自然连接的句子
+- 删除纯图片占位符、图注编号、页码、页眉页脚、脚注标记、参考文献编号
+- "如图3-1所示""见下表"等指向性文字，保留文字本身
+- 网址、邮箱、文件路径：若只是标注来源，简化为"相关链接"；若必须念出，按字符念
+- 删除乱码、控制字符、多余空格与重复空行，保留中文标点（，。！？、；：""''——《》）""",
+}
+
+POLISH_OUTPUT_RULES = r"""
+【输出要求】
+- 只输出可直接朗读的正文，段落之间用一个换行分隔。
+- 不要输出 JSON，不要输出 markdown 代码块，不要输出任何解释或前后缀。
+- 若某段文字无需修改，原样返回。
+"""
+
+# Default polish template.  ``{rules}`` expands to the enabled rule blocks,
+# ``{text}`` to the fragment being polished.
+DEFAULT_POLISH_PROMPT = (
+    "请根据下述【润色规范】，把【文本片段】改写为适合朗读的口播稿。\n"
+    "注意：这只是全书的一小部分，请只处理给出的文字，不要编造开头或结尾。\n"
+    "直接输出处理后的正文，不要任何解释。\n\n"
+    "【润色规范】\n"
+    + POLISH_BASE_PROMPT
+    + "\n{rules}\n"
+    + POLISH_OUTPUT_RULES
+    + "\n【文本片段】\n'''\n{text}\n'''\n\n请输出处理后的正文："
+)
+
+
+def build_polish_prompt(
+    chunk_text: str,
+    rules: list[str] | None = None,
+    template: str | None = None,
+    rule_texts: dict[str, str] | None = None,
+) -> str:
+    """Build the LLM prompt for polishing one text chunk.
+
+    Parameters
+    ----------
+    chunk_text : str
+        The raw text fragment to polish.
+    rules : list[str] or None
+        Which rule blocks to enable.  When *None*, every rule is enabled.
+    template : str or None
+        Override template.  When *None*, :data:`DEFAULT_POLISH_PROMPT`
+        is used.  If the template lacks a ``{text}`` placeholder the
+        fragment is appended at the end.
+    rule_texts : dict[str, str] or None
+        Override text for individual rule blocks, keyed like
+        :data:`POLISH_RULES`.  Empty values fall back to the built-in
+        default for that rule.
+
+    Returns
+    -------
+    str
+        The full prompt string ready to send to an LLM.
+    """
+    if rules is None:
+        rules = list(POLISH_RULES.keys())
+
+    texts = dict(POLISH_RULES)
+    if rule_texts:
+        texts.update({k: v for k, v in rule_texts.items() if v})
+
+    rule_text = "\n".join(texts[k] for k in rules if k in texts)
+
+    tpl = template or DEFAULT_POLISH_PROMPT
+    if "{text}" not in tpl:
+        tpl = tpl.rstrip() + "\n\n'''\n{text}\n'''"
+    return _fill(tpl, {"rules": rule_text, "text": chunk_text})
+
+
+def clean_llm_text(raw: str) -> str:
+    """Strip code fences and stray whitespace from an LLM plain-text reply."""
+    if not raw:
+        return ""
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines)
+    return text.strip()
