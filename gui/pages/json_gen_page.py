@@ -51,6 +51,7 @@ class JsonGenPage(QWidget):
     """Page for generating JSON from chapters using an LLM provider."""
 
     generate_requested = pyqtSignal(list, str, int, int)
+    cancel_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -167,6 +168,7 @@ class JsonGenPage(QWidget):
 
         self.cancel_btn = PushButton(t("common.cancel"), self)
         self.cancel_btn.setVisible(False)
+        self.cancel_btn.clicked.connect(self.cancel_requested.emit)
         left_layout.addWidget(self.cancel_btn)
 
         splitter.addWidget(left_panel)
@@ -289,6 +291,10 @@ class JsonGenPage(QWidget):
         self.status_list.clear()
         self.progress_bar.setValue(0)
         self.log_text.clear()
+
+    def set_progress(self, value: int, message: str = "") -> None:
+        """Update the overall progress bar (0-100)."""
+        self.progress_bar.setValue(max(0, min(100, value)))
 
     def set_generating(self, generating: bool) -> None:
         """Toggle between generating and idle UI state."""

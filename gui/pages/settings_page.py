@@ -10,6 +10,7 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
@@ -223,10 +224,24 @@ class SettingsPage(ScrollArea):
         self._mineru_token = PasswordLineEdit()
         self._mineru_token.setPlaceholderText(t("settings.api_token"))
 
+        # Per-file page ceiling.  MinerU rejects larger uploads, so a longer
+        # book is cut into page-range parts and converted concurrently.
+        self._mineru_pages_spin = SpinBox()
+        self._mineru_pages_spin.setRange(20, 1000)
+        self._mineru_pages_spin.setSingleStep(1)
+        self._mineru_pages_spin.setToolTip(t("settings.mineru_max_pages_hint"))
+
+        # How many page-range parts upload at once.
+        self._mineru_workers_spin = SpinBox()
+        self._mineru_workers_spin.setRange(1, 10)
+        self._mineru_workers_spin.setToolTip(t("settings.mineru_max_workers_hint"))
+
         sub, card = _make_group(
             "MinerU 配置",
             [
                 _make_row(t("settings.api_token"), self._mineru_token),
+                _make_row(t("settings.mineru_max_pages"), self._mineru_pages_spin),
+                _make_row(t("settings.mineru_max_workers"), self._mineru_workers_spin),
             ],
         )
         root_layout.addWidget(sub)
@@ -283,6 +298,11 @@ class SettingsPage(ScrollArea):
         slider_layout.addWidget(self._threshold_slider, stretch=1)
         slider_layout.addWidget(self._threshold_label)
 
+        # Auto-save each chapter's JSON as it completes during generation
+        self._autosave_check = QCheckBox(t("settings.autosave"))
+        self._autosave_check.setChecked(True)
+        self._autosave_check.setToolTip(t("settings.autosave_hint"))
+
         sub, card = _make_group(
             t("settings.general"),
             [
@@ -290,6 +310,7 @@ class SettingsPage(ScrollArea):
                 _make_row(t("settings.chunk_size"), self._chunk_spin),
                 _make_row(t("settings.max_workers"), self._workers_spin),
                 _make_row(t("settings.threshold"), slider_container),
+                _make_row(t("settings.autosave"), self._autosave_check),
             ],
         )
         root_layout.addWidget(sub)
@@ -376,6 +397,8 @@ class SettingsPage(ScrollArea):
 
         # MinerU
         self._mineru_token.setText(config.mineru_api_token)
+        self._mineru_pages_spin.setValue(config.mineru_max_pages)
+        self._mineru_workers_spin.setValue(config.mineru_max_workers)
 
         # TTS
         self._tts_url.setText(config.tts_server_url)
@@ -389,6 +412,7 @@ class SettingsPage(ScrollArea):
         self._workers_spin.setValue(config.default_max_workers)
         self._threshold_slider.setValue(config.default_similarity_threshold)
         self._threshold_label.setText(str(config.default_similarity_threshold))
+        self._autosave_check.setChecked(config.json_gen_autosave)
 
         # LLM prompts (empty config value -> show the built-in default)
         for attr, _label_key, default_text in _PROMPT_FIELDS:
@@ -422,6 +446,8 @@ class SettingsPage(ScrollArea):
             qwen_model=self._qwen_model.text().strip(),
             # MinerU
             mineru_api_token=self._mineru_token.text().strip(),
+            mineru_max_pages=self._mineru_pages_spin.value(),
+            mineru_max_workers=self._mineru_workers_spin.value(),
             # TTS
             tts_server_url=self._tts_url.text().strip() or "http://localhost:8300",
             # General
@@ -429,6 +455,7 @@ class SettingsPage(ScrollArea):
             default_chunk_size=self._chunk_spin.value(),
             default_max_workers=self._workers_spin.value(),
             default_similarity_threshold=self._threshold_slider.value(),
+            json_gen_autosave=self._autosave_check.isChecked(),
             # LLM prompts
             **prompt_values,
         )

@@ -279,6 +279,18 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "字符",
         "en": "chars",
     },
+    "gen.autosave_saved": {
+        "zh": "已自动保存",
+        "en": "Auto-saved",
+    },
+    "gen.autosave_failed": {
+        "zh": "自动保存失败",
+        "en": "Auto-save failed",
+    },
+    "gen.cancelled": {
+        "zh": "已取消生成",
+        "en": "Generation cancelled",
+    },
 
     # ==================================================================
     # Text polish page
@@ -366,6 +378,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "polish.no_chapters": {
         "zh": "没有可用的章节",
         "en": "No chapters available",
+    },
+    "polish.cancelled": {
+        "zh": "已取消润色",
+        "en": "Polishing cancelled",
     },
 
     # ==================================================================
@@ -471,6 +487,22 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "MinerU",
         "en": "MinerU",
     },
+    "settings.mineru_max_pages": {
+        "zh": "单文件最大页数",
+        "en": "Max pages per file",
+    },
+    "settings.mineru_max_pages_hint": {
+        "zh": "超过此页数的 PDF 会按页切分为多个批次并行上传。MinerU 对单个文件有页数上限，超限会直接拒绝解析。",
+        "en": "PDFs above this page count are split into page-range batches and uploaded in parallel. MinerU rejects a single file above its page ceiling.",
+    },
+    "settings.mineru_max_workers": {
+        "zh": "转换并发批次",
+        "en": "Parallel conversion batches",
+    },
+    "settings.mineru_max_workers_hint": {
+        "zh": "同时上传解析的批次数。调大会更快，但可能触发 MinerU 限流。",
+        "en": "How many batches upload and parse at once. Higher is faster but may hit MinerU rate limits.",
+    },
     "settings.general": {
         "zh": "通用设置",
         "en": "General",
@@ -514,6 +546,14 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "settings.max_workers": {
         "zh": "最大并发数",
         "en": "Max Workers",
+    },
+    "settings.autosave": {
+        "zh": "生成时自动保存 JSON",
+        "en": "Auto-save JSON during generation",
+    },
+    "settings.autosave_hint": {
+        "zh": "每完成一章就写入项目文件夹（与导入文件同目录、以书名命名）",
+        "en": "Write each chapter to the project folder as soon as it finishes",
     },
     "settings.threshold": {
         "zh": "相似度阈值",

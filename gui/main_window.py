@@ -7,7 +7,6 @@ management, and pipeline state coordination between pages.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -30,7 +29,7 @@ from qfluentwidgets import (
 )
 
 from gui.core.config import AppConfig, load_config, save_config
-from gui.core.history import safe_filename
+from gui.core.history import safe_filename, write_chapter_json
 from gui.core.models import PipelineState
 from gui.i18n import set_language, t
 from gui.pages.import_page import ImportPage
@@ -277,6 +276,7 @@ class MainWindow(FluentWindow):
 
     def _connect_json_gen_page(self):
         self._json_gen_page.generate_requested.connect(self._on_generate_requested)
+        self._json_gen_page.cancel_requested.connect(self._on_gen_cancel)
 
     def _connect_speaker_page(self):
         self._speaker_page.extract_requested.connect(self._on_extract_speakers)
@@ -331,7 +331,14 @@ class MainWindow(FluentWindow):
 
         from gui.workers.mineru_worker import MineruWorker
 
-        worker = MineruWorker(file_path, token)
+        worker = MineruWorker(
+            file_path,
+            token,
+            max_pages=self.config.mineru_max_pages,
+            max_workers=self.config.mineru_max_workers,
+            output_dir=str(self._project_dir()),
+            book_name=state.book_name or "untitled",
+        )
         worker.progress.connect(self._import_page.set_progress)
         worker.finished.connect(self._on_mineru_finished)
         worker.error.connect(self._on_mineru_error)
@@ -349,11 +356,26 @@ class MainWindow(FluentWindow):
         self._import_page.set_progress(0)
         self._import_page.on_convert_finished(False, msg)
 
+    def _project_dir(self) -> Path:
+        """Project folder for the current book: a directory named after the
+        book, next to the file the user imported.
+
+        Created lazily on first write, so importing without converting never
+        leaves an empty directory behind.  Used both by the conversion
+        auto-save and by ``_on_import_content_ready``.
+        """
+        book_name = self.pipeline_state.book_name or "untitled"
+        dir_name = safe_filename(book_name) or "untitled"
+        imported = self.pipeline_state.imported_file
+        if imported is not None and imported.path:
+            return Path(imported.path).parent / dir_name
+        return Path.cwd() / dir_name
+
     def _on_import_content_ready(self, content: str, book_name: str):
         """Markdown content is ready — store and switch to split page."""
         self.pipeline_state.markdown_content = content
         self.pipeline_state.book_name = book_name
-        self.pipeline_state.output_dir = f"{book_name}_chapters"
+        self.pipeline_state.output_dir = str(self._project_dir())
 
         self._ensure_page("chapter_split")
         if self._chapter_split_page:
@@ -521,13 +543,24 @@ class MainWindow(FluentWindow):
         )
         self._polish_worker = worker
         worker.chapter_progress.connect(self._polish_page.update_chapter_status)
+        worker.progress.connect(self._polish_page.set_progress)
         worker.log_message.connect(self._polish_page.append_log)
         worker.finished.connect(self._on_polish_finished)
         worker.error.connect(self._on_polish_error)
+        worker.cancelled.connect(self._on_polish_cancelled)
         self._active_workers.append(worker)
         worker.finished.connect(lambda _: self._cleanup_worker(worker))
         worker.error.connect(lambda _: self._cleanup_worker(worker))
+        worker.cancelled.connect(lambda: self._cleanup_worker(worker))
         worker.start()
+
+    def _on_polish_cancelled(self):
+        if self._polish_page:
+            self._polish_page.set_polishing(False)
+        InfoBar.warning(
+            t("common.warning"), t("polish.cancelled"),
+            parent=self, position=InfoBarPosition.TOP, duration=3000,
+        )
 
     def _on_polish_cancel(self):
         worker = getattr(self, "_polish_worker", None)
@@ -645,18 +678,44 @@ class MainWindow(FluentWindow):
             max_workers=workers,
             chunk_size=chunk_size,
             prompt_template=self.config.prompt_json_gen or None,
+            output_dir=self.pipeline_state.output_dir,
+            autosave=self.config.json_gen_autosave,
         )
+        self._json_gen_worker = worker
+        self._json_gen_page.reset_progress()
+        self._json_gen_page.set_generating(True)
         worker.chapter_progress.connect(self._json_gen_page.update_chapter_status)
+        worker.progress.connect(self._json_gen_page.set_progress)
         worker.log_message.connect(self._json_gen_page.append_log)
         worker.finished.connect(self._on_gen_finished)
         worker.error.connect(self._on_gen_error)
+        worker.cancelled.connect(self._on_gen_cancelled)
         self._active_workers.append(worker)
         worker.finished.connect(lambda _: self._cleanup_worker(worker))
         worker.error.connect(lambda _: self._cleanup_worker(worker))
+        worker.cancelled.connect(lambda: self._cleanup_worker(worker))
         worker.start()
+
+    def _on_gen_cancel(self):
+        worker = getattr(self, "_json_gen_worker", None)
+        if worker is not None:
+            worker.cancel()
+        if self._json_gen_page:
+            self._json_gen_page.append_log("已请求取消生成...")
+
+    def _on_gen_cancelled(self):
+        if self._json_gen_page:
+            self._json_gen_page.set_generating(False)
+        InfoBar.warning(
+            t("common.warning"), t("gen.cancelled"),
+            parent=self, position=InfoBarPosition.TOP, duration=3000,
+        )
 
     def _on_gen_finished(self, results: list):
         from gui.core.models import ChapterResult, TTSEntry
+
+        if self._json_gen_page:
+            self._json_gen_page.set_generating(False)
 
         self.pipeline_state.chapter_results = []
         for r in results:
@@ -685,6 +744,8 @@ class MainWindow(FluentWindow):
         )
 
     def _on_gen_error(self, msg: str):
+        if self._json_gen_page:
+            self._json_gen_page.set_generating(False)
         InfoBar.error(t("common.error"), msg, parent=self, position=InfoBarPosition.TOP, duration=5000)
 
     # ------------------------------------------------------------------
@@ -801,16 +862,19 @@ class MainWindow(FluentWindow):
         )
 
     def _on_export_json(self, output_dir: str):
-        """Export all chapter results as JSON files."""
+        """Export all chapter results as JSON files.
+
+        Uses the same writer as the incremental auto-save, so exporting into
+        the project folder overwrites those files rather than duplicating them.
+        """
         out = Path(output_dir)
-        out.mkdir(parents=True, exist_ok=True)
 
         for cr in self.pipeline_state.chapter_results:
-            filename = f"P{cr.chapter_index:02d}_{cr.chapter_title}.json"
-            entries = [e.model_dump() for e in cr.entries]
-            (out / filename).write_text(
-                json.dumps(entries, ensure_ascii=False, indent=2),
-                encoding="utf-8",
+            write_chapter_json(
+                out,
+                cr.chapter_index,
+                cr.chapter_title,
+                [e.model_dump() for e in cr.entries],
             )
 
         InfoBar.success(

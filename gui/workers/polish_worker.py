@@ -4,6 +4,10 @@
 Runs *before* JSON generation: chunks each chapter's raw text, asks an
 LLM to rewrite it into a TTS-friendly spoken script (tables, numbers,
 markdown/typography), and returns the polished plain text per chapter.
+
+Chunks are dispatched through a single flat thread pool, so a book made of
+one or two very long chapters parallelises just as well as one with many
+short chapters.
 """
 
 from __future__ import annotations
@@ -28,18 +32,24 @@ class TextPolishWorker(QThread):
     -------
     chapter_progress(int, str, str)
         ``(chapter_index, status, message)`` — same pattern as JsonGenWorker.
+    progress(int, str)
+        Overall ``(percentage 0-100, message)`` by completed chunk.
     log_message(str)
         Free-form log text.
     finished(list)
         List of result dicts: ``{chapter_index, chapter_title,
-        polished_content, status, error_message}``.
+        polished_content, status, error_message}``.  Not emitted on cancel.
+    cancelled()
+        The run was aborted by the user.
     error(str)
         Fatal error description.
     """
 
     chapter_progress = pyqtSignal(int, str, str)
+    progress = pyqtSignal(int, str)
     log_message = pyqtSignal(str)
     finished = pyqtSignal(list)
+    cancelled = pyqtSignal()
     error = pyqtSignal(str)
 
     def __init__(
@@ -76,147 +86,186 @@ class TextPolishWorker(QThread):
     # ------------------------------------------------------------------
     # Main logic
     # ------------------------------------------------------------------
-    def _process_chapter(self, client, chapter: dict) -> dict:
-        idx = chapter["index"]
-        title = chapter["title"]
-        content = chapter["content"]
+    def _process_chunk(self, client, chapter_index: int, chunk_index: int,
+                       chunk_text: str) -> tuple[int, int, str]:
+        """Polish a single chunk.
 
-        self.chapter_progress.emit(idx, "processing", f"正在润色: {title}")
-        self.log_message.emit(f"[章节 {idx}] 开始润色: {title}")
-
-        chunks = split_text_into_chunks(content, self._chunk_size)
-        self.log_message.emit(f"[章节 {idx}] 已切分为 {len(chunks)} 个片段")
-
-        polished_parts: list[str] = []
-
-        for i, chunk_text in enumerate(chunks):
-            if self._cancelled:
-                return {
-                    "chapter_index": idx,
-                    "chapter_title": title,
-                    "polished_content": "\n".join(polished_parts),
-                    "status": "cancelled",
-                    "error_message": "",
-                }
-
-            if not chunk_text.strip():
-                continue
-
-            self.log_message.emit(
-                f"[章节 {idx}] 润色片段 {i + 1}/{len(chunks)} ({len(chunk_text)}字符)"
-            )
-
-            prompt = build_polish_prompt(
-                chunk_text,
-                self._rules,
-                template=self._prompt_template,
-                rule_texts=self._rule_texts,
-            )
-            max_retries = 3
-            chunk_success = False
-
-            for attempt in range(max_retries):
-                try:
-                    response = client.chat.completions.create(
-                        model=self._model,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.2,
-                        max_tokens=1000000,
-                    )
-                    raw = response.choices[0].message.content or ""
-                    text = clean_llm_text(raw)
-                    if text:
-                        polished_parts.append(text)
-                    else:
-                        # Nothing usable came back — keep the original chunk.
-                        polished_parts.append(chunk_text.strip())
-                    chunk_success = True
-                    break
-                except Exception as e:
-                    self.log_message.emit(
-                        f"[章节 {idx}] 片段 {i + 1} 第{attempt + 1}次API错误: {e}"
-                    )
-                    time.sleep(2)
-
-            if not chunk_success:
-                # Fall back to the original text so nothing is lost.
-                self.log_message.emit(
-                    f"[章节 {idx}] 片段 {i + 1} 润色失败，保留原文"
-                )
-                polished_parts.append(chunk_text.strip())
-
-        polished = "\n".join(p for p in polished_parts if p)
+        Returns ``(chapter_index, chunk_index, text)``.  On failure the
+        original chunk text is returned so no content is ever lost.
+        """
+        if self._cancelled:
+            return chapter_index, chunk_index, ""
 
         self.log_message.emit(
-            f"[章节 {idx}] 完成，润色后 {len(polished)} 字符"
+            f"[章节 {chapter_index}] 润色片段 {chunk_index + 1} ({len(chunk_text)}字符)"
         )
-        self.chapter_progress.emit(idx, "done", f"完成: {title}")
+        prompt = build_polish_prompt(
+            chunk_text,
+            self._rules,
+            template=self._prompt_template,
+            rule_texts=self._rule_texts,
+        )
 
-        return {
-            "chapter_index": idx,
-            "chapter_title": title,
-            "polished_content": polished,
-            "status": "done",
-            "error_message": "",
-        }
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = client.chat.completions.create(
+                    model=self._model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.2,
+                    max_tokens=1000000,
+                )
+                raw = response.choices[0].message.content or ""
+                text = clean_llm_text(raw)
+                if text:
+                    return chapter_index, chunk_index, text
+                # Nothing usable came back — keep the original chunk.
+                return chapter_index, chunk_index, chunk_text.strip()
+            except Exception as e:
+                self.log_message.emit(
+                    f"[章节 {chapter_index}] 片段 {chunk_index + 1} "
+                    f"第{attempt + 1}次API错误: {e}"
+                )
+                time.sleep(2)
+
+        # All retries failed — fall back to the original text.
+        self.log_message.emit(
+            f"[章节 {chapter_index}] 片段 {chunk_index + 1} 润色失败，保留原文"
+        )
+        return chapter_index, chunk_index, chunk_text.strip()
 
     def run(self) -> None:
         try:
-            client = OpenAI(api_key=self._api_key, base_url=self._base_url)
-
             to_process = [
                 ch for ch in self._chapters
                 if ch["index"] in self._selected_indices
             ]
-
             if not to_process:
                 self.error.emit("没有选中任何章节")
                 return
 
-            self.log_message.emit(
-                f"开始润色 {len(to_process)} 个章节 (并发数: {self._max_workers})"
-            )
+            client = OpenAI(api_key=self._api_key, base_url=self._base_url)
 
-            results: list[dict] = []
+            # Per-chapter bookkeeping, touched only from this thread.
+            meta: dict[int, dict] = {}                    # idx -> {title, expected, error}
+            collected: dict[int, dict[int, str]] = {}     # idx -> {chunk_i: text}
+            done: dict[int, int] = {}                     # idx -> finished chunk count
+            results_by_idx: dict[int, dict] = {}
 
+            # 1. Flatten every chapter into one task list.
+            tasks: list[tuple[int, int, str]] = []
             for ch in to_process:
-                self.chapter_progress.emit(
-                    ch["index"], "pending", f"等待中: {ch['title']}"
+                idx, title = ch["index"], ch["title"]
+                self.chapter_progress.emit(idx, "pending", f"等待中: {title}")
+                try:
+                    chunks = split_text_into_chunks(ch["content"], self._chunk_size)
+                except Exception as e:
+                    meta[idx] = {"title": title, "expected": 0, "error": str(e)}
+                    results_by_idx[idx] = {
+                        "chapter_index": idx,
+                        "chapter_title": title,
+                        "polished_content": ch["content"],
+                        "status": "error",
+                        "error_message": str(e),
+                    }
+                    self.chapter_progress.emit(idx, "error", f"错误: {e}")
+                    continue
+
+                nonempty = [(i, t) for i, t in enumerate(chunks) if t.strip()]
+                meta[idx] = {"title": title, "expected": len(nonempty), "error": None}
+                collected[idx] = {}
+                done[idx] = 0
+                for i, t in nonempty:
+                    tasks.append((idx, i, t))
+                self.log_message.emit(f"[章节 {idx}] 已切分为 {len(nonempty)} 个片段")
+
+            def finalize(idx: int) -> None:
+                """Join a completed chapter's chunks in order."""
+                parts = [
+                    collected[idx][chunk_i]
+                    for chunk_i in sorted(collected[idx])
+                ]
+                polished = "\n".join(p for p in parts if p)
+                title = meta[idx]["title"]
+
+                results_by_idx[idx] = {
+                    "chapter_index": idx,
+                    "chapter_title": title,
+                    "polished_content": polished,
+                    "status": "done",
+                    "error_message": "",
+                }
+                self.chapter_progress.emit(idx, "done", f"完成: {title}")
+                self.log_message.emit(
+                    f"[章节 {idx}] 完成，润色后 {len(polished)} 字符"
                 )
 
-            workers = min(len(to_process), max(1, self._max_workers))
-            with ThreadPoolExecutor(max_workers=workers) as executor:
+            # 2. Chapters with nothing to send complete on the spot.
+            for idx, info in meta.items():
+                if info["error"] is None and info["expected"] == 0:
+                    finalize(idx)
+
+            total_tasks = len(tasks)
+            if total_tasks:
+                workers = max(1, min(total_tasks, self._max_workers))
+                self.log_message.emit(
+                    f"开始润色 {len(to_process)} 个章节 / {total_tasks} 个片段 "
+                    f"(并发数: {workers})"
+                )
+
+                executor = ThreadPoolExecutor(max_workers=workers)
                 futures = {
-                    executor.submit(self._process_chapter, client, ch): ch
-                    for ch in to_process
+                    executor.submit(self._process_chunk, client, ci, chi, txt): (ci, chi)
+                    for ci, chi, txt in tasks
                 }
+                completed = 0
+                try:
+                    for future in as_completed(futures):
+                        if self._cancelled:
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            break
 
-                for future in as_completed(futures):
-                    if self._cancelled:
-                        break
-                    try:
-                        results.append(future.result())
-                    except Exception as e:
-                        ch = futures[future]
-                        self.chapter_progress.emit(
-                            ch["index"], "error", f"错误: {str(e)}"
-                        )
-                        self.log_message.emit(
-                            f"[章节 {ch['index']}] 处理异常: {e}"
-                        )
-                        results.append({
-                            "chapter_index": ch["index"],
-                            "chapter_title": ch["title"],
-                            "polished_content": ch["content"],
-                            "status": "error",
-                            "error_message": str(e),
-                        })
+                        ci, chi = futures[future]
+                        try:
+                            _, _, text = future.result()
+                        except Exception as e:
+                            text = ""
+                            self.log_message.emit(
+                                f"[章节 {ci}] 片段 {chi + 1} 异常: {e}"
+                            )
 
+                        completed += 1
+                        collected[ci][chi] = text
+                        done[ci] += 1
+
+                        self.progress.emit(
+                            int(completed * 100 / total_tasks),
+                            f"片段 {completed}/{total_tasks}",
+                        )
+
+                        if (meta[ci]["error"] is None
+                                and done[ci] == meta[ci]["expected"]):
+                            finalize(ci)
+                finally:
+                    executor.shutdown(wait=True)
+            else:
+                self.progress.emit(100, "无待处理片段")
+
+            if self._cancelled:
+                self.log_message.emit("已取消润色")
+                self.cancelled.emit()
+                return
+
+            results = [
+                results_by_idx[ch["index"]]
+                for ch in to_process
+                if ch["index"] in results_by_idx
+            ]
             results.sort(key=lambda r: r["chapter_index"])
 
-            if not self._cancelled:
-                self.log_message.emit(f"全部润色完成! 共 {len(results)} 个章节")
-                self.finished.emit(results)
+            self.progress.emit(100, "完成")
+            self.log_message.emit(f"全部润色完成! 共 {len(results)} 个章节")
+            self.finished.emit(results)
 
         except Exception as e:
             self.error.emit(f"润色出错: {str(e)}")

@@ -19,6 +19,7 @@ Each file uses a YAML-like front-matter block:
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -46,6 +47,61 @@ class HistoryEntry:
 def safe_filename(name: str) -> str:
     """Strip characters that are problematic in file paths."""
     return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip("_ ")
+
+
+def chapter_json_name(chapter_index: int, chapter_title: str) -> str:
+    """Return the canonical on-disk filename for one chapter's JSON."""
+    stem = safe_filename(f"P{chapter_index:02d}_{chapter_title}")
+    return f"{stem or f'P{chapter_index:02d}'}.json"
+
+
+def write_chapter_json(
+    out_dir: Path | str,
+    chapter_index: int,
+    chapter_title: str,
+    entries: list[dict],
+) -> Path:
+    """Write one chapter's TTS entries as JSON into *out_dir*.
+
+    This is the single writer behind both the incremental auto-save during
+    generation and the manual export, so the two always produce byte-identical
+    files and a later export overwrites rather than duplicates.
+
+    Returns the path written.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / chapter_json_name(chapter_index, chapter_title)
+    path.write_text(
+        json.dumps(entries, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return path
+
+
+def source_markdown_name(book_name: str) -> str:
+    """Return the canonical filename for a book's converted markdown."""
+    return f"{safe_filename(book_name) or 'untitled'}.md"
+
+
+def write_source_markdown(
+    out_dir: Path | str,
+    book_name: str,
+    content: str,
+) -> Path:
+    """Write a book's merged conversion markdown into its project folder.
+
+    This is the auto-save behind PDF conversion, so an interrupted or
+    repeated import leaves the raw markdown on disk next to the source file
+    instead of only in memory.
+
+    Returns the path written.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / source_markdown_name(book_name)
+    path.write_text(content, encoding="utf-8")
+    return path
 
 
 def save_history(

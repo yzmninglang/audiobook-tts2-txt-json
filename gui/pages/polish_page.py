@@ -377,6 +377,10 @@ class PolishPage(QWidget):
         self.progress_bar.setValue(0)
         self.log_text.clear()
 
+    def set_progress(self, value: int, message: str = "") -> None:
+        """Update the overall progress bar (0-100)."""
+        self.progress_bar.setValue(max(0, min(100, value)))
+
     def set_polishing(self, active: bool) -> None:
         self.start_btn.setVisible(not active)
         self.cancel_btn.setVisible(active)
