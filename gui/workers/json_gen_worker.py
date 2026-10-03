@@ -4,7 +4,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from PyQt6.QtCore import QThread, pyqtSignal
 from openai import OpenAI
 from gui.core.history import write_chapter_json
-from gui.core.pipeline import build_json_gen_prompt, split_text_into_chunks, extract_json_from_response
+from gui.core.pipeline import (
+    MAX_OUTPUT_TOKENS,
+    build_json_gen_prompt,
+    extract_json_from_response,
+    split_text_into_chunks,
+)
 
 class JsonGenWorker(QThread):
     chapter_progress = pyqtSignal(int, str, str)  # chapter_index, status, message
@@ -67,7 +72,7 @@ class JsonGenWorker(QThread):
                     model=self._model,
                     messages=[{"role": "user", "content": user_prompt}],
                     temperature=0.2,
-                    max_tokens=1000000,
+                    max_tokens=MAX_OUTPUT_TOKENS,
                 )
                 raw = response.choices[0].message.content
                 parsed = extract_json_from_response(raw)

@@ -101,7 +101,7 @@ def classify_speakers_with_ai(speakers):
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.1,  # 降低温度以获得更一致的结果
-                max_tokens=600000,
+                max_tokens=32768,
             )
             raw = response.choices[0].message.content
 

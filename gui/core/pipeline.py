@@ -138,14 +138,44 @@ def build_json_gen_prompt(chunk_text: str, template: str | None = None) -> str:
 
 
 # ============================================================
-# split_by_fuzzy_matching  (ported from split_chaps.py)
+# Chapter splitting (ported from split_chaps.py)
+#
+# Two stages: fuzzy matching collects *every* line that resembles a
+# chapter title, then an LLM picks the real heading out of each title's
+# candidates (see gui/workers/split_worker.py).  The fuzzy stage alone
+# is the fallback when no LLM is available.
 # ============================================================
-def split_by_fuzzy_matching(
+
+# Output-token budget for every chat.completions call.  This is *not* a
+# target length — it is a reservation: gateways check
+# (input tokens + max_tokens) <= context length, so asking for the whole
+# window (as 1000000 used to) leaves no room for the prompt itself and
+# every request fails with a 400.
+#
+# Sized for the widest response we can actually produce: JSON generation
+# splits every paragraph to 60-80 characters and attaches an 8-float
+# emotion vector to each entry, so a 15000-character chunk (the largest
+# ``chunk_size`` the pages allow) comes back at roughly 30k tokens.  65536
+# is also Gemini's per-response ceiling, and 20k of input plus 65536 still
+# sits far below the 1M-token window.
+MAX_OUTPUT_TOKENS = 65536
+
+# How many lines above/below a candidate are shown to the LLM as context.
+SPLIT_CONTEXT_RADIUS = 5
+
+# Cap on how many candidates one chapter title contributes to a single
+# prompt.  Short titles ("序", "一") can match hundreds of lines, which
+# would blow the prompt up; the real heading is almost always among the
+# highest-scoring matches.
+SPLIT_MAX_CANDIDATES_PER_TITLE = 20
+
+
+def collect_split_candidates(
     text_lines: list[str],
     chapter_titles: list[str],
     threshold: int = 40,
-) -> list[dict]:
-    """Split book text into chapters using fuzzy title matching.
+) -> dict[str, list[tuple[int, int]]]:
+    """Score every line against every chapter title, keeping all matches.
 
     Parameters
     ----------
@@ -158,11 +188,12 @@ def split_by_fuzzy_matching(
 
     Returns
     -------
-    list[dict]
-        Each dict has keys: index (1-based), title (str), content (str),
-        line_start (int), line_end (int).
+    dict[str, list[tuple[int, int]]]
+        ``{title: [(line_index, score), ...]}``, only for titles that
+        matched at least once, each list in line order.  Line indices are
+        **raw indices into** *text_lines* (blank lines included), matching
+        the ``line_start`` / ``line_end`` convention used downstream.
     """
-    # -- 1. Collect potential split points: title -> [(line_index, score)] --
     split_points: dict[str, list[tuple[int, int]]] = {
         title: [] for title in chapter_titles
     }
@@ -181,21 +212,54 @@ def split_by_fuzzy_matching(
                 best_match_score = score
                 best_match_title = title
 
-        # 2. If best score >= threshold, record as potential split
         if best_match_score >= threshold:
             split_points[best_match_title].append((idx, best_match_score))
 
-    # -- 3. For each title, pick the point with highest score --
-    final_split_points: list[tuple[int, str]] = []
-    for title, points in split_points.items():
-        if points:
-            best_point = max(points, key=lambda x: x[1])
-            final_split_points.append((best_point[0], title))
+    return {title: points for title, points in split_points.items() if points}
 
-    # -- 4. Sort split points by line number --
-    final_split_points.sort(key=lambda x: x[0])
 
-    # -- 5. Walk through lines, splitting at each split point --
+def build_split_context(
+    text_lines: list[str],
+    line_idx: int,
+    radius: int = SPLIT_CONTEXT_RADIUS,
+) -> tuple[str, str, str]:
+    """Return ``(before, line, after)`` around *line_idx*, as joined text.
+
+    Out-of-range slices are clipped rather than raising, so this is safe
+    for candidates at either end of the book.
+    """
+    start = max(0, line_idx - radius)
+    end = min(len(text_lines), line_idx + radius + 1)
+
+    before = "\n".join(l.strip() for l in text_lines[start:line_idx])
+    line = (
+        text_lines[line_idx].strip()
+        if 0 <= line_idx < len(text_lines)
+        else ""
+    )
+    after = "\n".join(l.strip() for l in text_lines[line_idx + 1:end])
+
+    return before, line, after
+
+
+def assemble_chapters(
+    text_lines: list[str],
+    final_split_points: list[tuple[int, str]],
+) -> list[dict]:
+    """Cut *text_lines* into chapters at each split point.
+
+    Parameters
+    ----------
+    final_split_points : list[tuple[int, str]]
+        ``(line_index, title)`` pairs, sorted by line index.
+
+    Returns
+    -------
+    list[dict]
+        Each dict has keys: index (1-based), title (str), content (str),
+        line_start (int), line_end (int).  Content before the first split
+        point becomes a chapter titled ``"扉页"``.
+    """
     chapters: list[dict] = []
     current_chapter_lines: list[str] = []
     current_chapter_title = "扉页"
@@ -243,6 +307,80 @@ def split_by_fuzzy_matching(
         })
 
     return chapters
+
+
+def split_by_fuzzy_matching(
+    text_lines: list[str],
+    chapter_titles: list[str],
+    threshold: int = 40,
+) -> list[dict]:
+    """Split book text into chapters using fuzzy matching alone.
+
+    Keeps the single best-scoring line per title.  This is the fallback
+    path when no LLM is configured; :func:`collect_split_candidates`
+    plus LLM adjudication (``SplitWorker``) is the primary one.
+
+    Returns
+    -------
+    list[dict]
+        Each dict has keys: index (1-based), title (str), content (str),
+        line_start (int), line_end (int).
+    """
+    groups = collect_split_candidates(text_lines, chapter_titles, threshold)
+    final_split_points = [
+        (max(points, key=lambda x: x[1])[0], title)
+        for title, points in groups.items()
+    ]
+    final_split_points.sort(key=lambda x: x[0])
+    return assemble_chapters(text_lines, final_split_points)
+
+
+# Default prompt for adjudicating one title's candidate lines.  Placeholders:
+# ``{title}`` (the chapter title being located) and ``{candidates}`` (a JSON
+# rendering of the candidate list with its surrounding context lines).
+DEFAULT_SPLIT_JUDGE_PROMPT = (
+    "下面是一本书的正文片段。有人用模糊匹配找到了若干疑似「本应作为章节标题」的行，"
+    "它们被编号为候选 0 到 N-1。请判断其中哪一个是真正的正文分章标题。\n\n"
+    "注意：\n"
+    "1. 目录页（多行结构雷同、常带页码或省略号）里的标题不是分章点。\n"
+    "2. 页眉/页脚、正文里对章节的引用、索引条目，都不是分章点。\n"
+    "3. 真正的分章点通常独占一行，上下是空白或正文的开头。\n"
+    '4. 若没有任何一个候选是真正的分章点，返回 {"best": -1}。\n\n'
+    "【目标标题】{title}\n\n"
+    "【候选】\n{candidates}\n\n"
+    '只输出 JSON，形如 {"best": 2}，不要任何解释。'
+)
+
+
+def build_split_judge_prompt(
+    chapter_title: str,
+    candidates: list[dict],
+    template: str | None = None,
+) -> str:
+    """Build the LLM prompt that picks one real heading among *candidates*.
+
+    Parameters
+    ----------
+    chapter_title : str
+        The title whose split point is being located.
+    candidates : list[dict]
+        Each dict has keys ``id`` (int, 0-based within this group),
+        ``score`` (int), ``before`` (str), ``line`` (str) and
+        ``after`` (str).
+    template : str or None
+        Override template.  When *None*, :data:`DEFAULT_SPLIT_JUDGE_PROMPT`
+        is used.  A template missing a placeholder gets the corresponding
+        data appended.
+    """
+    candidates_json = json.dumps(candidates, ensure_ascii=False, indent=2)
+
+    tpl = template or DEFAULT_SPLIT_JUDGE_PROMPT
+    if "{candidates}" not in tpl:
+        tpl = tpl.rstrip() + "\n\n【候选】\n{candidates}"
+    if "{title}" not in tpl:
+        tpl = tpl.rstrip() + "\n\n【目标标题】{title}"
+
+    return _fill(tpl, {"title": chapter_title, "candidates": candidates_json})
 
 
 # ============================================================
@@ -297,6 +435,34 @@ def extract_json_from_response(content: str) -> list | None:
             return json.loads(m.group(1))
         except Exception:
             pass
+    return None
+
+
+def extract_json_object(content: str) -> dict | None:
+    """Try to parse a JSON *object* from an LLM response string.
+
+    The object counterpart of :func:`extract_json_from_response`: first
+    attempts ``json.loads(content)``, then falls back to a regex search
+    for a ``{...}`` span (handles markdown fences or surrounding prose).
+    Returns *None* if nothing parseable as a dict is found.
+    """
+    try:
+        parsed = json.loads(content)
+    except Exception:
+        parsed = None
+    else:
+        if isinstance(parsed, dict):
+            return parsed
+
+    m = re.search(r"(\{.*\})", content, flags=re.S)
+    if m:
+        try:
+            parsed = json.loads(m.group(1))
+        except Exception:
+            pass
+        else:
+            if isinstance(parsed, dict):
+                return parsed
     return None
 
 

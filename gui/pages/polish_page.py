@@ -59,6 +59,7 @@ class PolishPage(QWidget):
     polish_requested = pyqtSignal(list, str, int, int, list)
     cancel_requested = pyqtSignal()
     export_requested = pyqtSignal(str)  # target directory
+    import_requested = pyqtSignal(str)  # source directory
     next_step = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -188,13 +189,19 @@ class PolishPage(QWidget):
         self.start_btn = PrimaryPushButton(
             FluentIcon.EDIT, t("polish.start"), self
         )
+        self.start_btn.setToolTip(t("polish.start_hint"))
         self.start_btn.clicked.connect(self._on_start_clicked)
         left_layout.addWidget(self.start_btn)
 
         self.cancel_btn = PushButton(t("common.cancel"), self)
         self.cancel_btn.setVisible(False)
-        self.cancel_btn.clicked.connect(self.cancel_requested.emit)
+        self.cancel_btn.clicked.connect(self._on_cancel_clicked)
         left_layout.addWidget(self.cancel_btn)
+
+        self.import_btn = PushButton(FluentIcon.FOLDER, t("polish.import"), self)
+        self.import_btn.setToolTip(t("polish.import_hint"))
+        self.import_btn.clicked.connect(self._on_import_clicked)
+        left_layout.addWidget(self.import_btn)
 
         self.export_btn = PushButton(FluentIcon.SAVE, t("polish.export"), self)
         self.export_btn.clicked.connect(self._on_export_clicked)
@@ -384,11 +391,16 @@ class PolishPage(QWidget):
     def set_polishing(self, active: bool) -> None:
         self.start_btn.setVisible(not active)
         self.cancel_btn.setVisible(active)
+        if active:
+            # Reset the "cancelling…" state left by a previous run.
+            self.cancel_btn.setEnabled(True)
+            self.cancel_btn.setText(t("common.cancel"))
         self.provider_combo.setEnabled(not active)
         self.workers_slider.setEnabled(not active)
         self.chunk_spin.setEnabled(not active)
         self.select_all_btn.setEnabled(not active)
         self.deselect_all_btn.setEnabled(not active)
+        self.import_btn.setEnabled(not active)
         self.export_btn.setEnabled(not active)
         self.next_btn.setEnabled(not active)
         for box in self._rule_boxes.values():
@@ -454,6 +466,27 @@ class PolishPage(QWidget):
         directory = QFileDialog.getExistingDirectory(self, t("polish.export"), "")
         if directory:
             self.export_requested.emit(directory)
+
+    def _on_cancel_clicked(self) -> None:
+        """Acknowledge the click immediately.
+
+        The requests already in flight cannot be interrupted, so the run
+        really does take a moment to stop — without this the button looks
+        like it did nothing.
+        """
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.setText(t("polish.cancelling"))
+        self.cancel_requested.emit()
+
+    def _on_import_clicked(self) -> None:
+        """Pick a folder and ask MainWindow to load previously exported text.
+
+        Deliberately has no ``has_polished()`` guard: restoring after a
+        restart is exactly the case where nothing is polished yet.
+        """
+        directory = QFileDialog.getExistingDirectory(self, t("polish.import"), "")
+        if directory:
+            self.import_requested.emit(directory)
 
     def _on_start_clicked(self) -> None:
         selected = self._get_selected_indices()

@@ -55,6 +55,41 @@ def chapter_json_name(chapter_index: int, chapter_title: str) -> str:
     return f"{stem or f'P{chapter_index:02d}'}.json"
 
 
+def polish_text_name(chapter_index: int, chapter_title: str) -> str:
+    """Return the canonical filename for one chapter's polished text.
+
+    Same ``P{nn}_{title}`` stem as :func:`chapter_json_name` so the export
+    and the import always agree on what a file is called.
+    """
+    stem = safe_filename(f"P{chapter_index:02d}_{chapter_title}") or f"P{chapter_index:02d}"
+    return f"{stem}.txt"
+
+
+# Leading ``P07`` in a chapter file stem.  The digits must be followed by
+# ``_`` or the end of the name, so "P2P网络.txt" is not read as chapter 2.
+_CHAPTER_STEM_RE = re.compile(r"^P(\d+)(?:_|$)")
+
+
+def parse_polish_filename(filename: str) -> tuple[int, str] | None:
+    """Inverse of :func:`polish_text_name`: ``P07_标题.txt`` -> ``(7, "标题")``.
+
+    Returns ``None`` when the name carries no chapter index, which is the
+    signal to skip the file rather than guess.  The title is ``""`` for a
+    bare ``P07.txt``.
+    """
+    stem = Path(filename).stem
+    match = _CHAPTER_STEM_RE.match(stem)
+    if not match:
+        return None
+    return int(match.group(1)), stem[match.end():].lstrip("_")
+
+
+def parse_chapter_index(filename: str) -> int | None:
+    """The chapter index alone, or ``None`` if the name has none."""
+    parsed = parse_polish_filename(filename)
+    return parsed[0] if parsed else None
+
+
 def write_chapter_json(
     out_dir: Path | str,
     chapter_index: int,

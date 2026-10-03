@@ -29,8 +29,13 @@ from qfluentwidgets import (
 )
 
 from gui.core.config import AppConfig, load_config, save_config
-from gui.core.history import safe_filename, write_chapter_json
-from gui.core.models import PipelineState
+from gui.core.history import (
+    parse_polish_filename,
+    polish_text_name,
+    safe_filename,
+    write_chapter_json,
+)
+from gui.core.models import ChapterInfo, PipelineState
 from gui.i18n import set_language, t
 from gui.pages.import_page import ImportPage
 from gui.styles import (
@@ -272,6 +277,7 @@ class MainWindow(FluentWindow):
         self._polish_page.polish_requested.connect(self._on_polish_requested)
         self._polish_page.cancel_requested.connect(self._on_polish_cancel)
         self._polish_page.export_requested.connect(self._on_polish_export)
+        self._polish_page.import_requested.connect(self._on_polish_import)
         self._polish_page.next_step.connect(self._on_polish_next)
 
     def _connect_json_gen_page(self):
@@ -291,6 +297,41 @@ class MainWindow(FluentWindow):
     # Import page handlers
     # ------------------------------------------------------------------
 
+    def _reset_book_state(self):
+        """Drop everything derived from the previously loaded book.
+
+        Called when a new file is picked.  Chapter indices restart at 1 for
+        every book, so chapters, polished text and speakers left over from
+        the previous one would otherwise be silently reused as if they
+        belonged to the new one — ``polished_content[1]`` is the *previous*
+        book's first chapter no matter which book is loaded now.
+
+        ``imported_file`` and ``book_name`` are deliberately left alone: the
+        caller sets them to the new book's values right after.
+        """
+        state = self.pipeline_state
+        state.markdown_content = ""
+        state.chapter_list_raw = ""
+        state.chapters = []
+        state.polished_content = {}
+        state.chapter_results = []
+        state.speakers = []
+        state.classifications = {}
+        state.output_dir = ""
+
+        # The pages keep their own copies of the same data — clear those too,
+        # so nothing from the previous book can be shown or acted on.
+        if self._chapter_split_page:
+            self._chapter_split_page.update_content("")
+            self._chapter_split_page.set_chapters([])
+        if self._polish_page:
+            self._polish_page.clear()
+        if self._json_gen_page:
+            self._json_gen_page.update_chapters([])
+            self._json_gen_page.reset_progress()
+        if self._speaker_page:
+            self._speaker_page.clear()
+
     def _on_file_selected(self, path: str):
         """Store the selected file in pipeline state."""
         from gui.core.models import FileType, ImportedFile
@@ -301,6 +342,8 @@ class MainWindow(FluentWindow):
             file_type = FileType(ext)
         except ValueError:
             file_type = FileType.TXT
+
+        self._reset_book_state()
 
         self.pipeline_state.imported_file = ImportedFile(
             path=p,
@@ -394,19 +437,49 @@ class MainWindow(FluentWindow):
     # Chapter split handlers
     # ------------------------------------------------------------------
 
+    def _llm_selection(self) -> tuple[str, int]:
+        """Provider display name and worker count for the split stage.
+
+        Both are taken from the polish page — it owns the only provider
+        picker in the pipeline before JSON generation, and reusing it keeps
+        the two stages consistent without adding a second control.
+
+        Deliberately does *not* force-create the polish page: the lazy
+        bootstrap skips pages that already exist, so creating it here would
+        silently drop its navigation entry.  It is built within a few
+        event-loop ticks of startup anyway.
+        """
+        page = self._polish_page
+        if page is not None:
+            return page.provider_combo.currentText(), page.workers_slider.value()
+        return "OpenRouter", 5
+
     def _on_split_requested(self, content: str, titles: list, threshold: int):
         from gui.workers.split_worker import SplitWorker
 
-        worker = SplitWorker(content, titles, threshold)
+        provider, workers = self._llm_selection()
+        api_key, base_url, model = self._resolve_provider(provider)
+
+        # No "missing key, abort" guard here on purpose (unlike polishing):
+        # splitting degrades to pure fuzzy matching instead of refusing.
+        worker = SplitWorker(
+            content, titles, threshold,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            provider=(provider or "").lower(),
+            max_workers=workers,
+            prompt_template=self.config.prompt_split_judge or None,
+        )
         worker.progress.connect(self._chapter_split_page.set_progress)
         worker.finished.connect(self._on_split_finished)
         worker.error.connect(self._on_split_error)
         self._active_workers.append(worker)
-        worker.finished.connect(lambda _: self._cleanup_worker(worker))
-        worker.error.connect(lambda _: self._cleanup_worker(worker))
+        worker.finished.connect(lambda *_: self._cleanup_worker(worker))
+        worker.error.connect(lambda *_: self._cleanup_worker(worker))
         worker.start()
 
-    def _on_split_finished(self, chapters: list):
+    def _on_split_finished(self, chapters: list, note: str = ""):
         self.pipeline_state.chapters = []
         from gui.core.models import ChapterInfo
 
@@ -425,11 +498,17 @@ class MainWindow(FluentWindow):
             chapters_tuples = [(ch["title"], ch["content"]) for ch in chapters]
             self._chapter_split_page.set_chapters(chapters_tuples)
 
-        InfoBar.success(
-            t("common.success"),
+        message = (
             t("split.split_success").replace("{count}", str(len(chapters)))
             if "{count}" in t("split.split_success")
-            else f"{t('split.split_success')} ({len(chapters)})",
+            else f"{t('split.split_success')} ({len(chapters)})"
+        )
+        if note:
+            message += f"\n{note}"
+
+        InfoBar.success(
+            t("common.success"),
+            message,
             parent=self,
             position=InfoBarPosition.TOP,
             duration=3000,
@@ -513,13 +592,32 @@ class MainWindow(FluentWindow):
 
         from gui.workers.polish_worker import TextPolishWorker
 
-        chapters_data = [
-            {"index": ch.index, "title": ch.title, "content": ch.content}
-            for ch in self.pipeline_state.chapters
-        ]
-        actual_indices = [
-            self.pipeline_state.chapters[i].index for i in selected_indices
-        ]
+        # Polish whatever the chapter's text currently is: an earlier polish
+        # result if there is one, otherwise the raw chapter.  Re-running the
+        # stage this way is how imported text gets polished again — those
+        # chapters have no raw content at all, only the restored polish.
+        polished = self.pipeline_state.polished_content
+        chapters_data = []
+        for i in selected_indices:
+            ch = self.pipeline_state.chapters[i]
+            text = polished.get(ch.index) or ch.content
+            if not text.strip():
+                continue
+            chapters_data.append(
+                {"index": ch.index, "title": ch.title, "content": text}
+            )
+
+        if not chapters_data:
+            InfoBar.warning(
+                t("common.warning"),
+                t("polish.no_text"),
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+            )
+            return
+
+        actual_indices = [c["index"] for c in chapters_data]
 
         self._polish_page.reset_progress()
         self._polish_page.set_polishing(True)
@@ -573,7 +671,11 @@ class MainWindow(FluentWindow):
         for r in results:
             idx = r["chapter_index"]
             text = r.get("polished_content", "")
-            if r.get("status") == "done" and text:
+            if not text:
+                # Nothing came back for this chapter — keep whatever text it
+                # already had rather than blanking it out.
+                continue
+            if r.get("status") == "done":
                 self.pipeline_state.polished_content[idx] = text
             if self._polish_page:
                 self._polish_page.set_polished(idx, text)
@@ -618,13 +720,107 @@ class MainWindow(FluentWindow):
         for idx, text in sorted(polished.items()):
             if not text:
                 continue
-            stem = safe_filename(f"P{idx:02d}_{titles.get(idx, '')}") or f"P{idx:02d}"
-            (out / f"{stem}.txt").write_text(text, encoding="utf-8")
+            path = out / polish_text_name(idx, titles.get(idx, ""))
+            path.write_text(text, encoding="utf-8")
             count += 1
 
         InfoBar.success(
             t("common.success"),
             f"{t('polish.export_success')}: {output_dir}",
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=5000,
+        )
+
+    def _on_polish_import(self, source_dir: str):
+        """Restore polished text written by :meth:`_on_polish_export`.
+
+        Files are matched by the ``P{nn}`` prefix in their names — the same
+        convention the export writes; anything without that prefix is
+        skipped rather than guessed at.
+
+        Chapters that do not exist yet are rebuilt from the filenames, so a
+        whole session can be restored after a restart without importing the
+        source document and splitting it again.  Only the polished text is on
+        disk, so those chapters get an empty original ``content``; JSON
+        generation reads ``polished_content`` in preference to it anyway.
+        """
+        src = Path(source_dir)
+        known = {ch.index for ch in self.pipeline_state.chapters}
+
+        new_titles: dict[int, str] = {}   # index -> title, for chapters to create
+        imported: set[int] = set()
+        failed = 0
+
+        for path in sorted(src.glob("*.txt")):
+            parsed = parse_polish_filename(path.name)
+            if parsed is None:
+                continue
+            idx, title = parsed
+            try:
+                text = path.read_text(encoding="utf-8")
+            except Exception:
+                failed += 1
+                continue
+            if idx not in known and idx not in new_titles:
+                new_titles[idx] = title
+            self.pipeline_state.polished_content[idx] = text
+            imported.add(idx)
+
+        if not imported:
+            InfoBar.warning(
+                t("common.warning"),
+                t("polish.import_none"),
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=5000,
+            )
+            return
+
+        if new_titles:
+            self.pipeline_state.chapters = sorted(
+                self.pipeline_state.chapters
+                + [
+                    ChapterInfo(
+                        index=idx,
+                        title=title or f"P{idx:02d}",
+                        content="",
+                    )
+                    for idx, title in new_titles.items()
+                ],
+                key=lambda ch: ch.index,
+            )
+
+        if self._polish_page:
+            if new_titles:
+                # Rebuilding the list is what makes the new chapters visible;
+                # it also clears each row's polished text, hence the re-apply.
+                self._polish_page.update_chapters([
+                    {
+                        "index": ch.index,
+                        "name": f"P{ch.index:02d}_{ch.title}",
+                        "original": ch.content,
+                    }
+                    for ch in self.pipeline_state.chapters
+                ])
+            for idx in imported:
+                self._polish_page.set_polished(
+                    idx, self.pipeline_state.polished_content[idx]
+                )
+            self._polish_page.append_log(
+                f"从 {source_dir} 导入润色文本 {len(imported)} 章"
+                + (f"，新建 {len(new_titles)} 章" if new_titles else "")
+                + (f"，{failed} 个文件读取失败" if failed else "")
+            )
+
+        message = f"{t('polish.import_success')}: {len(imported)}"
+        if new_titles:
+            message += f"，{t('polish.import_added')} {len(new_titles)}"
+        if failed:
+            message += f"，{failed} {t('polish.import_failed')}"
+        InfoBar.success(
+            t("common.success"),
+            message,
             parent=self,
             position=InfoBarPosition.TOP,
             duration=5000,

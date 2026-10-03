@@ -146,7 +146,7 @@ def process_single_file(txt_path):
                     model=MODEL_NAME,
                     messages=[{"role": "user", "content": user_prompt}],
                     temperature=0.2, # 低温度保证格式稳定
-                    max_tokens=1000000, # 给输出留足空间
+                    max_tokens=65536, # 输出预留；不能占满整个上下文窗口，否则输入无处安放
                 )
                 
                 raw_content = response.choices[0].message.content

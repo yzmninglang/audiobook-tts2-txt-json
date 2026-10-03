@@ -149,6 +149,12 @@ class ChapterSplitPage(QWidget):
         self._progress_bar.setVisible(False)
         left_layout.addWidget(self._progress_bar)
 
+        # Status line: e.g. "AI 判别 3/12 章节".  Splitting now involves LLM
+        # round-trips, so the progress *message* matters, not just the bar.
+        self._status_label = BodyLabel("", left_widget)
+        self._status_label.setWordWrap(True)
+        left_layout.addWidget(self._status_label)
+
         self._splitter.addWidget(left_widget)
 
     # ------------------------------------------------------------------
@@ -208,6 +214,7 @@ class ChapterSplitPage(QWidget):
         titles_text = self._chapter_edit.toPlainText().strip()
         titles = [line.strip() for line in titles_text.splitlines() if line.strip()]
         threshold = self._threshold_slider.value()
+        self._status_label.clear()
         self.split_requested.emit(self._markdown_content, titles, threshold)
 
     def _on_chapter_item_clicked(self, item: QListWidgetItem) -> None:
@@ -225,9 +232,11 @@ class ChapterSplitPage(QWidget):
         self._preview_edit.setPlainText(text)
 
     def set_progress(self, value: int, message: str = "") -> None:
-        """Update the splitting progress bar (0-100)."""
+        """Update the splitting progress bar (0-100) and status line."""
         self._progress_bar.setVisible(True)
         self._progress_bar.setValue(value)
+        if message:
+            self._status_label.setText(message)
 
     def set_chapters(self, chapters: list[tuple[str, str]]) -> None:
         """Populate the split result list.
@@ -244,6 +253,7 @@ class ChapterSplitPage(QWidget):
             self._chapter_list_widget.addItem(item)
 
         self._progress_bar.setVisible(False)
+        self._status_label.clear()
         self._next_btn.setEnabled(bool(chapters))
 
     def get_threshold(self) -> int:

@@ -19,6 +19,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from openai import OpenAI
 
 from gui.core.pipeline import (
+    MAX_OUTPUT_TOKENS,
     build_polish_prompt,
     clean_llm_text,
     split_text_into_chunks,
@@ -108,12 +109,17 @@ class TextPolishWorker(QThread):
 
         max_retries = 3
         for attempt in range(max_retries):
+            if self._cancelled:
+                # Checked between attempts too: a failing chunk would
+                # otherwise sleep and retry for seconds after the user
+                # already hit cancel.
+                return chapter_index, chunk_index, ""
             try:
                 response = client.chat.completions.create(
                     model=self._model,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.2,
-                    max_tokens=1000000,
+                    max_tokens=MAX_OUTPUT_TOKENS,
                 )
                 raw = response.choices[0].message.content or ""
                 text = clean_llm_text(raw)
@@ -247,7 +253,13 @@ class TextPolishWorker(QThread):
                                 and done[ci] == meta[ci]["expected"]):
                             finalize(ci)
                 finally:
-                    executor.shutdown(wait=True)
+                    # On a normal run, wait so every result is in before the
+                    # chapters are assembled.  After a cancel, don't: the
+                    # requests still in flight cannot be aborted, and waiting
+                    # for them is exactly what made the button feel dead.
+                    # Those threads only return tuples — nothing is mutated
+                    # after this point.
+                    executor.shutdown(wait=not self._cancelled)
             else:
                 self.progress.emit(100, "无待处理片段")
 

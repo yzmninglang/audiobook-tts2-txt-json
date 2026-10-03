@@ -40,6 +40,7 @@ from gui.core.pipeline import (
     DEFAULT_CLASSIFY_PROMPT,
     DEFAULT_JSON_GEN_PROMPT,
     DEFAULT_POLISH_PROMPT,
+    DEFAULT_SPLIT_JUDGE_PROMPT,
     POLISH_RULES,
 )
 from gui.i18n import t
@@ -61,6 +62,7 @@ _LABEL_WIDTH = 120
 # An empty config value means "use the built-in default".
 _PROMPT_FIELDS: list[tuple[str, str, str]] = [
     ("prompt_json_gen", "settings.prompt_json_gen", DEFAULT_JSON_GEN_PROMPT),
+    ("prompt_split_judge", "settings.prompt_split", DEFAULT_SPLIT_JUDGE_PROMPT),
     ("prompt_polish", "settings.prompt_polish", DEFAULT_POLISH_PROMPT),
     (
         "prompt_polish_rule_tables",

@@ -4,6 +4,7 @@ import time
 from PyQt6.QtCore import QThread, pyqtSignal
 from openai import OpenAI
 from gui.core.pipeline import (
+    MAX_OUTPUT_TOKENS,
     extract_speakers_from_entries,
     build_classify_prompt,
     build_speaker_mapping,
@@ -62,7 +63,7 @@ class SpeakerClassifyWorker(QThread):
                         model=self._model,
                         messages=[{"role": "user", "content": prompt}],
                         temperature=0.1,
-                        max_tokens=600000,
+                        max_tokens=MAX_OUTPUT_TOKENS,
                     )
                     raw = response.choices[0].message.content
 

@@ -323,6 +323,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "开始润色",
         "en": "Start Polishing",
     },
+    "polish.start_hint": {
+        "zh": "对当前文本润色：已润色过的章节会基于其结果继续润色，未润色的用原文；不润色也可以直接下一步生成 JSON",
+        "en": "Polishes the current text: already-polished chapters are polished again on top of their result, others use the original; you can also skip this and go straight to JSON generation",
+    },
     "polish.polishing": {
         "zh": "正在润色...",
         "en": "Polishing...",
@@ -359,6 +363,30 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "润色文本已导出",
         "en": "Polished text exported",
     },
+    "polish.import": {
+        "zh": "批量导入润色文本",
+        "en": "Import Polished Text",
+    },
+    "polish.import_hint": {
+        "zh": "从导出目录恢复润色结果：按文件名里的 P01、P02… 对应章节，缺失的章节会自动补出来",
+        "en": "Restore polished text from an export folder: P01, P02… map to chapters, and missing chapters are recreated",
+    },
+    "polish.import_success": {
+        "zh": "润色文本已导入",
+        "en": "Polished text imported",
+    },
+    "polish.import_added": {
+        "zh": "新建章节",
+        "en": "chapters created",
+    },
+    "polish.import_none": {
+        "zh": "该目录下没有可导入的章节文件（需形如 P01_标题.txt）",
+        "en": "No importable chapter files in that folder (expected P01_Title.txt)",
+    },
+    "polish.import_failed": {
+        "zh": "个文件读取失败",
+        "en": "files failed to read",
+    },
     "polish.no_polished": {
         "zh": "暂无可导出的润色结果，请先润色",
         "en": "No polished text to export yet — polish first",
@@ -378,6 +406,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "polish.no_chapters": {
         "zh": "没有可用的章节",
         "en": "No chapters available",
+    },
+    "polish.no_text": {
+        "zh": "选中的章节没有可润色的文本",
+        "en": "The selected chapters have no text to polish",
     },
     "polish.cancelled": {
         "zh": "已取消润色",
@@ -580,12 +612,16 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "LLM Prompts",
     },
     "settings.prompt_hint": {
-        "zh": "留空则使用内置默认。可用占位符：{text}（待处理文本）、{rules}（润色规则）、{speaker_list}（人物列表）。修改前请谨慎，可能影响输出结构。",
-        "en": "Leave empty to use the built-in default. Placeholders: {text}, {rules}, {speaker_list}. Edit with care — changes may affect output structure.",
+        "zh": "留空则使用内置默认。可用占位符：{text}（待处理文本）、{rules}（润色规则）、{speaker_list}（人物列表）、{title}（目标章节标题）、{candidates}（候选切分点 JSON）。修改前请谨慎，可能影响输出结构。",
+        "en": "Leave empty to use the built-in default. Placeholders: {text}, {rules}, {speaker_list}, {title}, {candidates}. Edit with care — changes may affect output structure.",
     },
     "settings.prompt_json_gen": {
         "zh": "JSON 生成提示词",
         "en": "JSON Generation Prompt",
+    },
+    "settings.prompt_split": {
+        "zh": "章节切分判别提示词",
+        "en": "Chapter Split Judge Prompt",
     },
     "settings.prompt_polish": {
         "zh": "润色提示词",
