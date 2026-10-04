@@ -12,7 +12,7 @@ short chapters.
 
 from __future__ import annotations
 
-import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -79,10 +79,30 @@ class TextPolishWorker(QThread):
         self._rules = rules
         self._prompt_template = prompt_template
         self._rule_texts = rule_texts
-        self._cancelled = False
+        # Set by cancel(); waited on instead of slept on, so a retry backoff
+        # never keeps a cancelled run alive.
+        self._cancel_event = threading.Event()
+        self._client = None
+
+    @property
+    def _cancelled(self) -> bool:
+        return self._cancel_event.is_set()
 
     def cancel(self) -> None:
-        self._cancelled = True
+        """Stop as soon as possible.
+
+        Flagging alone is not enough: the pool can only notice between
+        requests, so a run with slow chunks would keep the UI in its busy
+        state for as long as the model took to answer.  Closing the HTTP
+        client makes the requests already in flight fail out immediately.
+        """
+        self._cancel_event.set()
+        client = self._client
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Main logic
@@ -132,7 +152,8 @@ class TextPolishWorker(QThread):
                     f"[章节 {chapter_index}] 片段 {chunk_index + 1} "
                     f"第{attempt + 1}次API错误: {e}"
                 )
-                time.sleep(2)
+                # Interruptible backoff: returns the moment cancel is hit.
+                self._cancel_event.wait(2)
 
         # All retries failed — fall back to the original text.
         self.log_message.emit(
@@ -151,6 +172,8 @@ class TextPolishWorker(QThread):
                 return
 
             client = OpenAI(api_key=self._api_key, base_url=self._base_url)
+            # Handed to cancel() so it can abort the requests in flight.
+            self._client = client
 
             # Per-chapter bookkeeping, touched only from this thread.
             meta: dict[int, dict] = {}                    # idx -> {title, expected, error}

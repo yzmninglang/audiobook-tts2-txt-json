@@ -1,5 +1,5 @@
 from __future__ import annotations
-import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PyQt6.QtCore import QThread, pyqtSignal
 from openai import OpenAI
@@ -45,10 +45,30 @@ class JsonGenWorker(QThread):
         self._prompt_template = prompt_template
         self._output_dir = output_dir
         self._autosave = autosave
-        self._cancelled = False
+        # Set by cancel(); waited on instead of slept on, so a retry backoff
+        # never keeps a cancelled run alive.
+        self._cancel_event = threading.Event()
+        self._client = None
 
-    def cancel(self):
-        self._cancelled = True
+    @property
+    def _cancelled(self) -> bool:
+        return self._cancel_event.is_set()
+
+    def cancel(self) -> None:
+        """Stop as soon as possible.
+
+        Flagging alone is not enough: the pool can only notice between
+        requests, so a run with slow chunks would keep the UI in its busy
+        state for as long as the model took to answer.  Closing the HTTP
+        client makes the requests already in flight fail out immediately.
+        """
+        self._cancel_event.set()
+        client = self._client
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
 
     def _process_chunk(self, client, chapter_index: int, chunk_index: int,
                        chunk_text: str) -> tuple[int, int, list | None]:
@@ -67,6 +87,11 @@ class JsonGenWorker(QThread):
 
         max_retries = 3
         for attempt in range(max_retries):
+            if self._cancelled:
+                # Checked between attempts too: a failing chunk would
+                # otherwise sleep and retry for seconds after the user
+                # already hit cancel.
+                return chapter_index, chunk_index, None
             try:
                 response = client.chat.completions.create(
                     model=self._model,
@@ -86,7 +111,8 @@ class JsonGenWorker(QThread):
                 self.log_message.emit(
                     f"[章节 {chapter_index}] 片段 {chunk_index + 1} 第{attempt + 1}次API错误: {e}"
                 )
-                time.sleep(2)
+                # Interruptible backoff: returns the moment cancel is hit.
+                self._cancel_event.wait(2)
 
         self.log_message.emit(f"[章节 {chapter_index}] 片段 {chunk_index + 1} 处理失败，已跳过")
         return chapter_index, chunk_index, None
@@ -125,6 +151,8 @@ class JsonGenWorker(QThread):
                 return
 
             client = OpenAI(api_key=self._api_key, base_url=self._base_url)
+            # Handed to cancel() so it can abort the requests in flight.
+            self._client = client
 
             # Per-chapter bookkeeping.  Only ever touched from this thread --
             # the pool workers just return their chunk's entries.
@@ -232,9 +260,13 @@ class JsonGenWorker(QThread):
                                 and done[ci] == meta[ci]["expected"]):
                             finalize(ci)
                 finally:
-                    # Join any requests still in flight (they cannot be aborted
-                    # mid-flight); wait=False above only stops pending ones.
-                    executor.shutdown(wait=True)
+                    # On a normal run, wait so every result is in before the
+                    # chapters are assembled.  After a cancel, don't: the
+                    # requests still in flight have already been aborted by
+                    # cancel(), and waiting for them is what made the button
+                    # feel dead.  Those threads only return tuples -- nothing
+                    # is mutated after this point.
+                    executor.shutdown(wait=not self._cancelled)
             else:
                 self.progress.emit(100, "无待处理片段")
 

@@ -415,6 +415,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "已取消润色",
         "en": "Polishing cancelled",
     },
+    "polish.cancelling": {
+        "zh": "正在取消…",
+        "en": "Cancelling…",
+    },
 
     # ==================================================================
     # Speaker page
